@@ -9,18 +9,21 @@
 所有运行产物（config/library/cache/logs）都在目标目录生成。
 """
 import ctypes
+import json
 import os
 import shutil
 import subprocess
 import sys
 import threading
 import tkinter as tk
+import urllib.request
 from pathlib import Path
 from tkinter import ttk
 
 import win_startup
 
 SRC = Path(__file__).resolve().parent
+APP_NAME = "pjsk-wallpaper"
 # 安装所需的最小文件集（不含 config/library/cache/logs 等运行产物）
 INSTALL_FILES = [
     "launcher.pyw", "server.py", "runtime.py", "gallery_update.py",
@@ -33,6 +36,31 @@ INSTALL_DIRS = ["app"]
 LEGACY_FILES = ["wallpaper.pyw"]
 DEFAULT_DIR = Path(os.environ.get("LOCALAPPDATA", str(SRC))) / "pjsk-wallpaper"
 DIR_NAME = "pjsk-wallpaper"
+
+
+def running_instance_in(dest: Path):
+    """目标安装目录里是否仍有本应用的后台实例在运行；有则返回其信息，否则 None。
+
+    判断依据只有两条——该实例自己发布的端口文件，以及 `/api/identity` 的身份应答：
+    **不看浏览器窗口是否关闭**（关掉 Web 窗口并不代表后台进程退出），也不按进程名
+    或 PID 猜测，避免误判、误杀无关进程。
+    """
+    try:
+        info = json.loads((Path(dest) / "runtime" / "server.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(info, dict) or info.get("app") != APP_NAME or not info.get("port"):
+        return None
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{int(info['port'])}/api/identity",
+                timeout=2) as r:
+            ident = json.loads(r.read().decode("utf-8"))
+    except Exception:                      # noqa: BLE001 —— 连不上/不是 HTTP 即视为无实例
+        return None
+    if not isinstance(ident, dict) or ident.get("app") != APP_NAME:
+        return None                        # 端口被别的服务占用：不当成本应用实例
+    return info
 
 
 def _dpi_aware():
@@ -183,12 +211,34 @@ class Wizard(tk.Tk):
             dest = self._resolve_dest(self.var_dir.get().strip())
             if dest is None:
                 return
+            if not self._confirm_not_running(dest):
+                return
             self.var_dir.set(str(dest))
             self._show("installing")
             self.pb.start(12)
             threading.Thread(target=self._install, args=(dest,), daemon=True).start()
         elif self._cur == "done":
             self._finish()
+
+    def _confirm_not_running(self, dest: Path) -> bool:
+        """覆盖程序文件前确认目标目录里没有正在运行的本应用实例。
+
+        关掉浏览器窗口不代表后台进程已退出；带病覆盖会让运行中的实例继续用旧模块
+        而磁盘已换成新代码。检测到实例时明确提示并要求用户从托盘正常退出后重试，
+        不做任何进程查杀。
+        """
+        info = running_instance_in(dest)
+        if info is None:
+            return True
+        from tkinter import messagebox
+        messagebox.showwarning(
+            "安装向导",
+            "检测到 pjsk 壁纸 正在后台运行"
+            + (f"（进程 {info.get('pid')}）" if info.get("pid") else "") + "。\n\n"
+            "请从系统托盘的「退出」结束它，然后重新点击「下一步」。\n"
+            "仅关闭浏览器窗口不会结束后台进程。",
+            parent=self)
+        return False
 
     def _resolve_dest(self, raw: str):
         """目标目录 = 输入框内容，原样使用（浏览时的补全只是便利，用户修改后以用户为准）。"""
@@ -267,7 +317,12 @@ class Wizard(tk.Tk):
 
     def _fatal(self, msg):
         from tkinter import messagebox
-        messagebox.showerror("安装向导", f"安装失败：{msg}", parent=self)
+        messagebox.showerror(
+            "安装向导",
+            f"安装失败：{msg}\n\n"
+            "程序文件可能处于新旧混合的不完整状态，请重新运行安装向导完成修复。\n"
+            "设置（config.json）、图库（library）、缓存（cache）与日志均不会被改动。",
+            parent=self)
         self.destroy()
 
     def _install_done(self):

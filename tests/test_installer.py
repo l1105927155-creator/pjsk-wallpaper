@@ -7,10 +7,14 @@
 并把「未勾选」当作「必须清除」。
 """
 import importlib.util
+import json
 import re
 import sys
+import tempfile
+import threading
 import types
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -64,6 +68,9 @@ class _Var:
 
     def get(self):
         return self._value
+
+    def set(self, value):
+        self._value = value
 
 
 class WinStartupTest(unittest.TestCase):
@@ -198,6 +205,228 @@ class WizardWiringTest(unittest.TestCase):
         w.assert_called_once()
         self.assertFalse(w.call_args[0][0])
         self.assertIn("launcher.pyw", w.call_args[0][1])
+
+
+def _serve_identity(app_name: str):
+    """起一个只回应 /api/identity 的本地服务，模拟"端口上的某个程序"。"""
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):        # 静默
+            pass
+
+        def do_GET(self):
+            body = json.dumps({"app": app_name, "port": self.server.server_port,
+                               "pid": 4321}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+class _RecordingThread:
+    """替换 threading.Thread：立即在 .start() 里同步执行目标，便于断言。"""
+
+    def __init__(self, target=None, args=(), **kwargs):
+        self._target, self._args = target, args
+
+    def start(self):
+        self._target(*self._args)
+
+
+@unittest.skipUnless(HAS_INSTALLER, "本环境无 tkinter，安装向导不可导入")
+class RunningInstanceTest(unittest.TestCase):
+    """升级前必须识别出运行中的本应用实例，且不得把无关服务误判成本应用。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dest = Path(self._tmp.name)
+        (self.dest / "runtime").mkdir(parents=True)
+        self.addCleanup(self._tmp.cleanup)
+
+    def _serve(self, app_name):
+        srv = _serve_identity(app_name)
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        return srv
+
+    def _port_file(self, port=None, app="pjsk-wallpaper"):
+        info = {"pid": 4321}
+        if app is not None:
+            info["app"] = app
+        if port is not None:
+            info["port"] = port
+        (self.dest / "runtime" / "server.json").write_text(
+            json.dumps(info), "utf-8")
+
+    def test_detects_live_instance(self):
+        srv = self._serve("pjsk-wallpaper")
+        self._port_file(srv.server_port)
+        info = inst.running_instance_in(self.dest)
+        self.assertIsNotNone(info)
+        self.assertEqual(int(info["port"]), srv.server_port)
+
+    def test_none_without_port_file(self):
+        self.assertIsNone(inst.running_instance_in(self.dest))
+
+    def test_none_when_port_file_corrupt(self):
+        (self.dest / "runtime" / "server.json").write_text("{ not json", "utf-8")
+        self.assertIsNone(inst.running_instance_in(self.dest))
+
+    def test_none_when_port_not_listening(self):
+        self._port_file(9)                      # 保留端口，未监听
+        self.assertIsNone(inst.running_instance_in(self.dest))
+
+    def test_none_when_file_app_name_is_foreign(self):
+        srv = self._serve("pjsk-wallpaper")
+        self._port_file(srv.server_port, app="some-other-app")
+        self.assertIsNone(inst.running_instance_in(self.dest))
+
+    def test_none_when_port_belongs_to_other_service(self):
+        """端口被无关服务占用时必须判定为「无实例」，避免误杀无关进程。"""
+        srv = self._serve("someone-else")
+        self._port_file(srv.server_port)
+        self.assertIsNone(inst.running_instance_in(self.dest))
+
+    def test_detects_real_server_instance(self):
+        """与真实服务对接：server.json 的文件格式与 /api/identity 应答必须能被识别。"""
+        import core
+        import runtime as rt_mod
+        import server as sv_mod
+
+        rt = rt_mod.Runtime(tick_seconds=9999)
+        port_file = self.dest / "runtime" / "server.json"
+        with mock.patch.object(core, "CONFIG_PATH", self.dest / "config.json"), \
+                mock.patch.object(sv_mod, "RUNTIME_DIR", self.dest / "runtime"), \
+                mock.patch.object(sv_mod, "PORT_FILE", port_file):
+            srv = sv_mod.WallpaperServer(rt, port=18970 + (id(self) % 50))
+            srv.bind()
+            srv.write_port_file()
+            self.addCleanup(srv.shutdown)
+            srv.start_background()
+            try:
+                info = inst.running_instance_in(self.dest)
+            finally:
+                srv.shutdown()
+        self.assertIsNotNone(info, "真实运行中的实例必须能被识别")
+        self.assertEqual(int(info["port"]), srv.port)
+
+
+@unittest.skipUnless(HAS_INSTALLER, "本环境无 tkinter，安装向导不可导入")
+class UpgradeGateTest(unittest.TestCase):
+    """实例在跑时不得开始覆盖程序文件，并要给出明确提示。"""
+
+    def _fake_wizard(self, dest):
+        self.shown, self.installed = [], []
+        fake = types.SimpleNamespace(
+            _cur="dir",
+            var_dir=_Var(str(dest)),
+            _resolve_dest=lambda raw: Path(raw),
+            _show=self.shown.append,
+            pb=types.SimpleNamespace(start=lambda ms: None),
+            _install=self.installed.append,
+            after=lambda *args: None,
+        )
+        # 沿用真实的「确认没有实例在跑」实现，只替换其中的检测来源
+        fake._confirm_not_running = lambda d: inst.Wizard._confirm_not_running(fake, d)
+        return fake
+
+    def test_blocks_when_instance_running(self):
+        from tkinter import messagebox
+        fake = self._fake_wizard("D:/fake-install")
+        with mock.patch.object(inst, "running_instance_in",
+                               lambda d: {"app": "pjsk-wallpaper", "port": 1,
+                                          "pid": 4321}), \
+                mock.patch.object(messagebox, "showwarning") as warn, \
+                mock.patch.object(inst.threading, "Thread", _RecordingThread):
+            inst.Wizard._next(fake)
+        warn.assert_called_once()
+        self.assertIn("后台运行", warn.call_args[0][1])
+        self.assertIn("托盘", warn.call_args[0][1])
+        self.assertNotIn("installing", self.shown, "不得进入安装页")
+        self.assertEqual(self.installed, [], "不得开始复制程序文件")
+
+    def test_proceeds_when_no_instance(self):
+        fake = self._fake_wizard("D:/fake-install")
+        with mock.patch.object(inst, "running_instance_in", lambda d: None), \
+                mock.patch.object(inst.threading, "Thread", _RecordingThread):
+            inst.Wizard._next(fake)
+        self.assertIn("installing", self.shown)
+        self.assertEqual(self.installed, [Path("D:/fake-install")])
+
+
+@unittest.skipUnless(HAS_INSTALLER, "本环境无 tkinter，安装向导不可导入")
+class InstallPreservesUserDataTest(unittest.TestCase):
+    """覆盖程序文件时不得触碰用户数据。"""
+
+    def test_upgrade_keeps_config_library_cache_logs(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            src, dest = td / "src", td / "dest"
+            (src / "app").mkdir(parents=True)
+            (src / "app" / "index.html").write_text("new-index", "utf-8")
+            for name in ("launcher.pyw", "core.py"):
+                (src / name).write_text("new-" + name, "utf-8")
+            dest.mkdir()
+            (dest / "config.json").write_text('{"user": 1}', "utf-8")
+            (dest / "library" / "custom").mkdir(parents=True)
+            (dest / "library" / "custom" / "mine.png").write_bytes(b"img")
+            (dest / "cache" / "thumbs").mkdir(parents=True)
+            (dest / "cache" / "thumbs" / "x.png").write_bytes(b"thumb")
+            (dest / "logs").mkdir()
+            (dest / "logs" / "update.log").write_text("log", "utf-8")
+
+            fake = types.SimpleNamespace(_step=lambda msg: None,
+                                         after=lambda *args: None,
+                                         _install_done=lambda: None)
+            with mock.patch.object(inst, "SRC", src), \
+                    mock.patch.object(inst, "INSTALL_FILES",
+                                      ["launcher.pyw", "core.py"]), \
+                    mock.patch.object(inst, "INSTALL_DIRS", ["app"]):
+                inst.Wizard._install(fake, dest)
+
+            self.assertEqual((dest / "config.json").read_text("utf-8"),
+                             '{"user": 1}')
+            self.assertTrue((dest / "library" / "custom" / "mine.png").is_file())
+            self.assertEqual((dest / "cache" / "thumbs" / "x.png").read_bytes(),
+                             b"thumb")
+            self.assertEqual((dest / "logs" / "update.log").read_text("utf-8"),
+                             "log")
+            # 程序文件确实被新版本覆盖
+            self.assertEqual((dest / "launcher.pyw").read_text("utf-8"),
+                             "new-launcher.pyw")
+            self.assertEqual((dest / "app" / "index.html").read_text("utf-8"),
+                             "new-index")
+
+
+class InstallerUpgradeInvariantTest(unittest.TestCase):
+    """源码级不变量：升级前查实例，且不自行查杀进程。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.src = (ROOT / "installer.pyw").read_text("utf-8")
+
+    def test_consults_running_instance_before_next(self):
+        block = re.search(r"def _next\(self\):(.*?)def ", self.src, re.S).group(1)
+        self.assertIn("_confirm_not_running(", block,
+                      "开始安装前必须确认没有运行中的实例")
+        self.assertLess(block.index("_confirm_not_running("),
+                        block.index('_show("installing")'))
+
+    def test_never_kills_processes(self):
+        for banned in ("taskkill", "TerminateProcess", "os.kill", "psutil",
+                       "Popen(['task"):
+            self.assertNotIn(banned, self.src)
+
+    def test_judges_by_port_file_not_browser_window(self):
+        self.assertIn("/api/identity", self.src)
+        for banned in ("msedge", "chrome.exe"):
+            self.assertNotIn(banned, self.src)
 
 
 if __name__ == "__main__":
