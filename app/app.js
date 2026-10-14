@@ -23,12 +23,24 @@
       init.headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(opts.body);
     }
+    // 超时保护：请求卡住时不能让界面永远停在旧状态（否则看起来像「点了没反应」）
+    var ctrl = (typeof AbortController === "function") ? new AbortController() : null;
+    var timer = null;
+    if (ctrl) {
+      init.signal = ctrl.signal;
+      timer = setTimeout(function () { ctrl.abort(); }, opts.timeout || 15000);
+    }
+    var clear = function () { if (timer) { clearTimeout(timer); timer = null; } };
     return fetch(path, init).then(function (r) {
+      clear();
       return r.text().then(function (t) {
         var body;
         try { body = JSON.parse(t); } catch (e) { body = t; }
         return { status: r.status, ok: r.ok, body: body };
       });
+    }, function (err) {
+      clear();
+      throw err;
     });
   }
 
@@ -95,11 +107,23 @@
   var S = null;            // 最近一次 /api/state 的返回
   var offset = 0;          // server_time - 本地时间（秒），用于倒计时校准
   var connected = false;
+  var lastOkTs = 0;        // 最近一次成功同步的时间戳
+  var degraded = false;    // 界面是否处于「未同步」状态
+  var imgSeq = 0;          // 预览图强制刷新用
+  var painted = { desk: null, lock: null };   // 各预览区「已经画出来」的图片 id
 
   function setPill(kind, text) {
     var el = $("statusPill");
     el.className = "pill" + (kind ? " " + kind : "");
     el.textContent = text;
+  }
+
+  function applyState(s) {
+    S = s;
+    offset = (s.server_time || Date.now() / 1000) - Date.now() / 1000;
+    lastOkTs = Date.now();
+    degraded = false;
+    render(s);
   }
 
   function loadState() {
@@ -110,9 +134,7 @@
         return;
       }
       connected = true;
-      S = r.body;
-      offset = (S.server_time || Date.now() / 1000) - Date.now() / 1000;
-      render(S);
+      applyState(r.body);
     }).catch(function () {
       connected = false;
       setPill("err", "连接中断");
@@ -126,7 +148,6 @@
     if (s.update.running) { setPill("busy", "图库更新中…"); }
     else if (s.status && s.status.indexOf("失败") >= 0) { setPill("err", s.status); }
     else { setPill("ok", "运行中"); }
-
     // 概览：桌面 / 锁屏
     renderWall("desk", s.desktop);
     renderWall("lock", s.lock);
@@ -172,9 +193,14 @@
   function renderWall(prefix, w) {
     var img = $(prefix + "Img"), ph = $(prefix + "Placeholder"),
         badge = $(prefix + "Badge");
-    if (w.current && w.current.id) {
-      var url = imgUrl(w.current.id, 1024);
-      if (img.getAttribute("src") !== url) { img.setAttribute("src", url); }
+    var id = (w.current && w.current.id) || null;
+    if (id) {
+      // 以「逻辑上是否换了图」为准强制刷新，而不是只比 src 字符串：
+      // 附带 &v= 变体参数，确保浏览器不会停留在上一张的位图上。
+      if (painted[prefix] !== id || !img.getAttribute("src")) {
+        img.setAttribute("src", imgUrl(id, 1024) + "&v=" + (++imgSeq));
+        painted[prefix] = id;
+      }
       img.classList.remove("hidden");
       ph.classList.add("hidden");
       badge.textContent = w.current.name;
@@ -182,6 +208,7 @@
     } else {
       img.classList.add("hidden");
       img.removeAttribute("src");
+      painted[prefix] = null;
       ph.classList.remove("hidden");
       badge.classList.add("hidden");
     }
@@ -248,11 +275,7 @@
         if (r.body && r.body.warnings && r.body.warnings.length) {
           toast(r.body.warnings.join("；"), "err");
         }
-        if (r.body && r.body.state) {
-          S = r.body.state;
-          offset = (S.server_time || Date.now() / 1000) - Date.now() / 1000;
-          render(S);
-        }
+        if (r.body && r.body.state) { applyState(r.body.state); }
         if (okMsg) { toast(okMsg, "ok"); }
       } else {
         var msg = (r.body && r.body.errors && r.body.errors.join("；")) || "保存失败";
@@ -271,15 +294,17 @@
     var path = target === "desktop"
       ? "/api/wallpaper/desktop/next" : "/api/wallpaper/lock/next";
     busy(btn, true);
-    api(path, { method: "POST", body: {} }).then(function (r) {
+    api(path, { method: "POST", body: {}, timeout: 30000 }).then(function (r) {
       var b = r.body || {};
       if (b.ok) { toast((target === "desktop" ? "桌面" : "锁屏") + " → " + b.name, "ok"); }
       else if (b.busy) { toast("切换进行中，请稍候", "err"); }
       else if (b.empty) { toast("图库为空：请先添加图片或更新图库", "err"); }
       else { toast(b.error || "切换失败", "err"); }
-      return loadState();
+      // 直接用同一次响应里的状态刷新界面，不依赖后续轮询
+      if (b.state) { applyState(b.state); } else { loadState(); }
     }).catch(function () {
       toast("切换失败：连接中断", "err");
+      loadState();
     }).then(function () { busy(btn, false); });
   }
 
@@ -567,6 +592,7 @@
 
     // 刷新 / 弹层
     $("btnRefresh").addEventListener("click", function () {
+      painted.desk = null; painted.lock = null;   // 强制重新拉取预览图
       loadState(); loadGallery(); toast("已刷新");
     });
     $("lightboxClose").addEventListener("click", function () {
@@ -653,11 +679,7 @@
             }
             setBanner(banner, "ok", msg);
             toast("设置已导入", "ok");
-            if (b.state) {
-              S = b.state;
-              offset = (S.server_time || Date.now() / 1000) - Date.now() / 1000;
-              render(S);
-            } else { loadState(); }
+            if (b.state) { applyState(b.state); } else { loadState(); }
           } else {
             var errs = (b.errors || []).join("；") || "导入失败";
             var warn = (b.warnings && b.warnings.length)
@@ -747,10 +769,22 @@
     bindTabs();
     bindAll();
     loadState().then(loadGallery);
+    // 常态轮询：即使页面不可见也继续（localhost 开销可忽略）。
+    // 之前为了省事在隐藏时直接 return，且不监听「恢复可见」，
+    // 一旦窗口被最小化/遮挡（Chrome 会节流甚至冻结页面）界面就会永久停在旧状态。
+    setInterval(loadState, POLL_MS);
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) { loadState(); }
+    });
+    window.addEventListener("focus", function () { loadState(); });
+    // 看门狗：长时间没同步成功就把状态显性化，避免「点了没反应」却毫无提示
     setInterval(function () {
-      if (document.hidden) { return; }   // 页面不可见时暂停轮询
-      loadState();
-    }, POLL_MS);
+      if (document.hidden) { return; }
+      if (lastOkTs && Date.now() - lastOkTs > 3 * POLL_MS && !degraded) {
+        degraded = true;
+        setPill("err", "状态未同步，请点刷新");
+      }
+    }, 2000);
   }
 
   if (document.readyState === "loading") {

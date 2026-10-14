@@ -78,3 +78,31 @@
 
    对应测试：`tests/test_runtime.py::ConfigImportExportTest`、`tests/test_server.py`、
    `tests/test_web_ui.py::test_config_transfer_controls`。
+
+8. **「点下一张后界面不刷新」的排查与加固**（用户实机反馈）：
+
+   排查结论（用真实数据逐层验证）：
+   - 后端正常：直接调用实例接口返回 `ok=true`，`state.desktop.current`/`last` 均更新；
+   - 系统层面正常：切换后 `HKCU\Control Panel\Desktop\Wallpaper` 更新，
+     Explorer 重新生成的 `TranscodedWallpaper` 与刚选中的图片**像素级完全一致（平均差 0.00）**，
+     即桌面壁纸确实已切换；
+   - 图库正常：144 张图片全部完整解码、尺寸 2560×1440、与源文件 sha256 一致；
+   - 全新页面前端正常：用 CDP 驱动真实 Chrome 点击「下一张」，src/徽标/时间均正确刷新、无 JS 异常；
+   - 服务端并发正常：6 路图片并发下 `GET /api/state` 稳定 5–30 ms。
+   - **定位到用户页面的硬证据**：其截图中倒计时比真实时间慢约 95 秒，
+     说明该页面 JS 定时器已停止 —— 窗口被最小化/长期遮挡时浏览器会节流甚至冻结页面，
+     而旧实现「页面不可见时直接跳过轮询」且不监听恢复可见事件，导致界面永久停在旧状态。
+
+   加固措施（本轮）：
+   - `POST /api/wallpaper/{desktop,lock}/next` 在**同一次响应**中返回最新 `state`，
+     界面据此直接渲染，不再依赖后续轮询；繁忙/失败响应同样携带 `state`；
+   - 轮询不再因 `document.hidden` 整体跳过；新增 `visibilitychange` / `focus` 立即同步；
+   - `api()` 增加 AbortController 超时（默认 15 s，切换 30 s），避免请求卡住导致界面静止；
+   - 预览按「逻辑 id」判定并附 `&v=` 变体参数强制刷新，不会停留在上一张的位图上；
+   - 看门狗：超过 3 个轮询周期未同步成功时顶部显示「状态未同步，请点刷新」，把静默失效变显性；
+   - 顺带修复：`core.thumbnail` 缓存键加入来源目录，避免 `pjsk/x.png` 与 `custom/x.png` 同名互相覆盖。
+
+   回归保障：
+   - `tests/test_server.py` 新增「next 响应必须带 state（含 busy 分支）」；
+   - `tests/test_web_ui.py::test_stale_page_hardening` 断言超时/可见性/看门狗/强制刷新等加固点存在；
+   - 新增 `tools/ui_check.js`（CDP 驱动真实 Chrome 的 UI 实机自检，9 项，可复现上述全部场景）。
