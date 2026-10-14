@@ -29,13 +29,6 @@ EXPORT_VERSION = 1         # 设置文件格式版本
 STATE_WAIT_MAX = 25        # /api/state 长轮询最长挂起秒数
 PREVIEW_WIDTH = 1024       # 概览预览的缩略图宽度（与前端 imgUrl(id, 1024) 一致）
 
-# 预览提前量（毫秒）：从下发切换到桌面真正开始淡入的实测时长。
-# 本机 8 次实测落在 375~605ms（中位 496ms），且与 set_desktop 的耗时同向变化，
-# 因此固定取 0.5s 即可把残留误差压到 ±0.13s。
-# 前端据此推迟预览过渡的起点，使预览与桌面背景同时开始过渡。
-# 只用于桌面：锁屏没有可见的系统过渡（切换时也看不到锁屏），同步没有意义。
-PREVIEW_DELAY_MS = 500
-
 # 可写字段的合法范围（与旧版 Spinbox 范围一致）
 _INT_RANGES = {
     ("desktop", "interval"): (1, 1440),
@@ -225,7 +218,6 @@ class Runtime:
             "rev": rev,
             "status": self._status,
             "config": cfg,
-            "preview_delay_ms": PREVIEW_DELAY_MS,
             "desktop": {
                 "enabled": bool(cfg["desktop"]["enabled"]),
                 "interval": int(cfg["desktop"]["interval"]),

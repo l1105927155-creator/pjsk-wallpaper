@@ -159,11 +159,14 @@ class StatePushTest(RuntimeBase):
         self.assertIsNone(s["desktop"]["pending"])
         self.assertIsNone(s["lock"]["pending"])
 
-    def test_state_exposes_preview_delay(self):
-        """前端靠它把预览的起步推迟到系统真正开始换桌面之后。"""
+    def test_state_has_no_preview_delay(self):
+        """前端不做人为延迟：收到 pending 即开始过渡，与后端发起切换同时刻。
+
+        曾有过的 preview_delay_ms（按实测补偿系统换图的起步延迟）已移除——
+        它是经验值，在不同机器/图片上不稳定，反而不如程序层面同步。
+        """
         s = self._runtime().state()
-        self.assertEqual(s["preview_delay_ms"], rt.PREVIEW_DELAY_MS)
-        self.assertGreater(s["preview_delay_ms"], 0)
+        self.assertNotIn("preview_delay_ms", s)
 
     def test_pending_is_broadcast_before_wallpaper_is_written(self):
         """核心时序：写系统壁纸之前就要把新图广播出去。

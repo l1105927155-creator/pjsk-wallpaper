@@ -220,7 +220,7 @@ async function main() {
         'next=' + b.next);
   check('新预览图已加载', b.loaded === true);
 
-  console.log('\n[3] 预览等够提前量才起步，且最终状态推送不会让过渡重来');
+  console.log('\n[3] 预览一收到通知就起步，且最终状态推送不会让过渡重来');
   const before = await probe();
   const seq = await evaluate(`(async function(){
     var img = document.getElementById('deskImg');
@@ -252,11 +252,10 @@ async function main() {
   // 只量前端负责的那一段：从「收到通知」到「开始过渡」。
   // （点击到通知之间还有后端预热缩略图的耗时，那部分会把系统与预览一起推迟，不算错位。）
   const delayMs = (sq.tSrc === null || sq.tNotify === null) ? -1 : sq.tSrc - sq.tNotify;
-  // 系统在收到下发后还要约 0.5s 才真正开始换桌面，预览必须等它，
-  // 否则就是「预览先切换，随后壁纸切换」。
-  check('预览等够提前量才起步（不是一收到通知就换）',
-        delayMs >= 350 && delayMs <= 900,
-        `起步于收到通知后 ${delayMs >= 0 ? delayMs.toFixed(0) : '—'}ms（提前量 500ms）`);
+  // 不引入任何人为延迟：收到通知就应开始过渡（本机渲染级别，几十毫秒内）。
+  check('预览一收到通知就开始过渡（不做人为延迟）',
+        delayMs >= 0 && delayMs <= 250,
+        `起步于收到通知后 ${delayMs >= 0 ? delayMs.toFixed(0) : '—'}ms`);
   check('预览在「下一张」请求返回之前就已开始换图（同步推进，非事后补）',
         sq.tSrc !== null && sq.tSrc < sq.tDone,
         `预览 ${sq.tSrc === null ? '—' : sq.tSrc.toFixed(0)}ms < 响应 ${sq.tDone.toFixed(0)}ms`);

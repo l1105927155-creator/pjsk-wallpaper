@@ -154,23 +154,21 @@ class WebUiTest(unittest.TestCase):
         """后端在写系统壁纸之前广播 pending，前端要优先用它，
         否则预览只能等切换完成后才更新（即「晚一步」）。"""
         self.assertIn("w.pending || w.current", self.js)
-        self.assertIn("function setWall(prefix, url, delayMs)", self.js)
+        self.assertIn("function setWall(prefix, url)", self.js)
 
-    def test_preview_waits_for_the_system_to_start(self):
-        """预览不能一收到 pending 就换：系统还要约 0.5s 才真正开始换桌面，
-        不等就会「预览先切换，随后壁纸切换」。提前量以后端给的为准。"""
-        self.assertIn('(w.pending && prefix === "desk") ? previewDelay : 0', self.js)
-        self.assertIn("previewDelay = S.preview_delay_ms", self.js)
-        # 按排定时刻等，而不是「加载完再等」——否则起步会被取图耗时往后推
-        self.assertIn("var due = Date.now() + (delayMs || 0);", self.js)
-        self.assertIn("var wait = due - Date.now();", self.js)
-        self.assertIn("setTimeout(fade, wait)", self.js)
-        # 锁屏没有可见的系统过渡，不应跟着延迟
-        self.assertNotRegex(self.js, r'prefix === "lock"\)\s*\?')
+    def test_preview_starts_immediately_without_delay(self):
+        """前端不得对预览引入任何人为延迟：收到 pending 就开始过渡，
+        与后端发起切换是同一时刻。曾经按实测补偿过一段提前量
+        （preview_delay_ms），它是经验值、在不同机器上不稳定，已移除。"""
+        self.assertNotIn("preview_delay_ms", self.js)
+        self.assertNotIn("previewDelay", self.js)
+        self.assertNotIn("PREVIEW_DELAY_MS", self.js)
+        self.assertNotIn("delayMs", self.js)
+        self.assertIn("setWall(prefix, imgUrl(show.id, 1024));", self.js)
 
     def test_preview_does_not_restart_when_switch_finishes(self):
         """切换完成后后端会再推一次状态（current 已是新图、pending 为空）。
-        排定的目标必须提前登记，否则那次推送会在延迟窗口内把过渡提前触发。"""
+        目标必须提前登记，否则那次推送会把同一次过渡再触发一遍。"""
         self.assertIn("cur.dataset.url = url;", self.js)   # 排定时即登记
         self.assertIn("cur.dataset.url = prevUrl;", self.js)  # 加载失败则撤销
         self.assertLess(self.js.index("var prevUrl = cur.dataset.url;"),
