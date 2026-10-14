@@ -3,72 +3,297 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>pjsk 壁纸（阶段3 最简控制台）</title>
-<style>
- body{font-family:"Microsoft YaHei UI",system-ui,sans-serif;margin:16px;background:#12151c;color:#e7eaf3}
- button{padding:6px 12px;margin:2px;cursor:pointer}
- pre{background:#1b1f2a;padding:10px;border-radius:6px;overflow:auto;max-height:40vh}
- fieldset{margin:10px 0;border:1px solid #2b3140;border-radius:6px}
-</style>
+<title>pjsk 壁纸 · 控制台</title>
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="assets/icon.png">
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<h1>pjsk 壁纸 · 控制台</h1>
-<p>阶段 3 最简页面：仅验证 API 连通与后台可长期运行。正式界面见阶段 4。</p>
+<div class="app">
 
-<fieldset><legend>状态</legend>
-  <div id="status">加载中…</div>
-  <button onclick="load()">刷新状态</button>
-</fieldset>
+  <header class="topbar">
+    <div class="brand">
+      <img src="assets/icon.png" alt="">
+      <div>
+        <div class="title">pjsk 壁纸</div>
+        <div class="small muted">本机壁纸控制台 · 关闭本页不影响后台轮换</div>
+      </div>
+    </div>
 
-<fieldset><legend>切换</legend>
-  <button onclick="post('/api/wallpaper/desktop/next')">桌面下一张</button>
-  <button onclick="post('/api/wallpaper/lock/next')">锁屏下一张</button>
-</fieldset>
+    <nav class="tabs" role="tablist">
+      <button type="button" data-view="overview" class="active" role="tab">概览</button>
+      <button type="button" data-view="gallery" role="tab">图库</button>
+      <button type="button" data-view="settings" role="tab">设置</button>
+    </nav>
 
-<fieldset><legend>图库</legend>
-  <button onclick="post('/api/gallery/update')">立即更新</button>
-  <button onclick="post('/api/system/open-folder',{which:'pjsk'})">打开 pjsk 目录</button>
-  <button onclick="post('/api/system/open-folder',{which:'custom'})">打开 custom 目录</button>
-</fieldset>
+    <div class="top-right">
+      <span class="pill" id="statusPill">连接中…</span>
+      <button type="button" class="btn ghost" id="btnRefresh">刷新</button>
+    </div>
+  </header>
 
-<fieldset><legend>配置（JSON 片段）</legend>
-  <button onclick="patch({desktop:{enabled:true},lock:{enabled:true}})">启用两者</button>
-  <button onclick="patch({desktop:{enabled:false},lock:{enabled:false}})">停用两者</button>
-</fieldset>
+  <main>
+    <!-- ============================ 概览 ============================ -->
+    <section class="view active" id="view-overview" role="tabpanel">
+      <div class="cards two">
+        <article class="card" data-target="desktop">
+          <div class="card-head">
+            <div>
+              <h2>桌面壁纸</h2>
+              <div class="card-sub">SystemParametersInfo 切换 · shell 淡入过渡</div>
+            </div>
+            <div class="spacer"></div>
+            <label class="switch">
+              <input type="checkbox" id="deskEnabled">
+              <span class="track"></span>
+              <span class="label">定时轮换</span>
+            </label>
+          </div>
 
-<fieldset><legend>原始返回</legend><pre id="out"></pre></fieldset>
+          <div class="preview">
+            <img id="deskImg" alt="当前桌面壁纸" class="hidden">
+            <div class="placeholder" id="deskPlaceholder">尚未识别当前桌面壁纸</div>
+            <span class="badge" id="deskBadge"></span>
+          </div>
 
-<script>
-const TOKEN = "__PJSK_TOKEN__";
-const H = {"X-Pjsk-Token": TOKEN, "Content-Type": "application/json"};
+          <div class="wall-meta">
+            <div>上一次切换：<b id="deskLast">—</b></div>
+            <div>下一次切换：<b id="deskNext">—</b></div>
+            <div>轮换间隔：<b id="deskIntervalTxt">—</b></div>
+            <div>倒计时：<b id="deskCountdown">—</b></div>
+          </div>
 
-async function api(path, opts = {}) {
-  const r = await fetch(path, Object.assign({headers: H}, opts));
-  const t = await r.text();
-  let body; try { body = JSON.parse(t); } catch (e) { body = t; }
-  return {status: r.status, body};
-}
-function show(o) { document.getElementById("out").textContent = JSON.stringify(o, null, 2); }
-async function load() {
-  const r = await api("/api/state");
-  const s = r.body;
-  document.getElementById("status").textContent =
-    `图库 pjsk ${s.gallery.pjsk} / custom ${s.gallery.custom}；` +
-    `桌面 ${s.desktop.enabled ? "开" : "关"} ${s.desktop.interval}min；` +
-    `锁屏 ${s.lock.enabled ? "开" : "关"} ${s.lock.interval}min；` +
-    `更新 ${s.update.running ? "进行中" : (s.update.message || "空闲")}`;
-  show(s);
-}
-async function post(path, data) {
-  const r = await api(path, {method: "POST", body: JSON.stringify(data || {})});
-  show(r); await load();
-}
-async function patch(data) {
-  const r = await api("/api/config", {method: "PATCH", body: JSON.stringify(data)});
-  show(r); await load();
-}
-load();
-setInterval(load, 5000);
-</script>
+          <div class="row between">
+            <label class="field">
+              <span>间隔（分钟）</span>
+              <input type="number" id="deskInterval" min="1" max="1440" step="1">
+            </label>
+            <button type="button" class="btn primary lg" id="deskNext">下一张</button>
+          </div>
+        </article>
+
+        <article class="card" data-target="lock">
+          <div class="card-head">
+            <div>
+              <h2>锁屏壁纸</h2>
+              <div class="card-sub">WinRT SetImageFileAsync · 与桌面完全独立</div>
+            </div>
+            <div class="spacer"></div>
+            <label class="switch">
+              <input type="checkbox" id="lockEnabled">
+              <span class="track"></span>
+              <span class="label">定时轮换</span>
+            </label>
+          </div>
+
+          <div class="preview">
+            <img id="lockImg" alt="当前锁屏壁纸" class="hidden">
+            <div class="placeholder" id="lockPlaceholder">尚未识别当前锁屏壁纸（切换后显示）</div>
+            <span class="badge" id="lockBadge"></span>
+          </div>
+
+          <div class="wall-meta">
+            <div>上一次切换：<b id="lockLast">—</b></div>
+            <div>下一次切换：<b id="lockNext">—</b></div>
+            <div>轮换间隔：<b id="lockIntervalTxt">—</b></div>
+            <div>倒计时：<b id="lockCountdown">—</b></div>
+          </div>
+
+          <div class="row between">
+            <label class="field">
+              <span>间隔（分钟）</span>
+              <input type="number" id="lockInterval" min="1" max="1440" step="1">
+            </label>
+            <button type="button" class="btn primary lg" id="lockNext">下一张</button>
+          </div>
+        </article>
+      </div>
+
+      <div class="cards two">
+        <article class="card">
+          <div class="card-head">
+            <h2>图库</h2>
+            <div class="spacer"></div>
+            <button type="button" class="btn" id="openPjsk">打开 pjsk 目录</button>
+            <button type="button" class="btn" id="openCustom">打开 custom 目录</button>
+          </div>
+          <div class="row" style="gap:28px">
+            <div class="stat"><span class="num" id="cntPjsk">—</span><span class="unit">张 pjsk</span></div>
+            <div class="stat"><span class="num" id="cntCustom">—</span><span class="unit">张自定义</span></div>
+            <div class="stat"><span class="num" id="cntTotal">—</span><span class="unit">合计</span></div>
+          </div>
+          <div class="banner" id="sourceBanner"></div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>图库更新</h2>
+            <div class="spacer"></div>
+            <button type="button" class="btn" id="btnLog">查看日志</button>
+            <button type="button" class="btn primary" id="btnUpdate">立即更新</button>
+          </div>
+          <div class="kv">
+            <dt>状态</dt><dd id="upState">—</dd>
+            <dt>上次更新</dt><dd id="upLast">—</dd>
+            <dt>下次更新</dt><dd id="upNext">—</dd>
+          </div>
+          <div class="banner hidden" id="updateBanner"></div>
+          <p class="hint" style="margin-top:10px">更新会联网拉取卡面；壁纸切换本身不联网。</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============================ 图库 ============================ -->
+    <section class="view" id="view-gallery" role="tabpanel">
+      <div class="card">
+        <div class="gallery-toolbar">
+          <div class="seg" id="srcSeg">
+            <button type="button" data-src="all" class="active">全部</button>
+            <button type="button" data-src="pjsk">pjsk</button>
+            <button type="button" data-src="custom">自定义</button>
+          </div>
+          <input type="text" id="gallerySearch" placeholder="按文件名搜索…" style="flex:1;min-width:140px">
+          <button type="button" class="btn primary" id="btnAddImages">添加图片…</button>
+          <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.webp,.bmp" multiple class="hidden">
+        </div>
+
+        <div class="dropzone" id="dropzone">
+          拖放图片到此处，或点击「添加图片…」选择本地文件<br>
+          <span class="small muted">支持 PNG / JPG / JPEG / WEBP / BMP，自动按 <span id="dzScreen">屏幕</span> 分辨率填充裁剪后存入 custom 图库</span>
+        </div>
+
+        <div class="row between" style="margin:14px 0 10px">
+          <span class="muted small" id="gallerySummary">—</span>
+        </div>
+
+        <div class="grid" id="galleryGrid"></div>
+        <div class="banner hidden" id="galleryEmpty"></div>
+
+        <div class="pager">
+          <button type="button" class="btn" id="pagePrev">上一页</button>
+          <span id="pageInfo" class="muted small">—</span>
+          <button type="button" class="btn" id="pageNext">下一页</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ 设置 ============================ -->
+    <section class="view" id="view-settings" role="tabpanel">
+      <div class="cards two">
+        <article class="card">
+          <div class="card-head">
+            <div><h2>轮换</h2>
+              <div class="card-sub">桌面与锁屏各自启停、各自间隔（分钟）</div></div>
+          </div>
+          <div class="field-row">
+            <label class="field"><span>桌面间隔（1–1440）</span>
+              <input type="number" id="setDeskInterval" min="1" max="1440"></label>
+            <label class="field"><span>锁屏间隔（1–1440）</span>
+              <input type="number" id="setLockInterval" min="1" max="1440"></label>
+          </div>
+          <div class="row" style="margin-top:12px;gap:20px">
+            <label class="switch"><input type="checkbox" id="setDeskEnabled">
+              <span class="track"></span><span class="label">启用桌面轮换</span></label>
+            <label class="switch"><input type="checkbox" id="setLockEnabled">
+              <span class="track"></span><span class="label">启用锁屏轮换</span></label>
+          </div>
+          <div class="banner hidden" id="rotateStatus"></div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <div><h2>图库来源</h2>
+              <div class="card-sub">两种来源都关闭时切换将无图可用</div></div>
+          </div>
+          <div class="row" style="gap:20px">
+            <label class="switch"><input type="checkbox" id="setUsePjsk">
+              <span class="track"></span><span class="label">pjsk 图库</span></label>
+            <label class="switch"><input type="checkbox" id="setUseCustom">
+              <span class="track"></span><span class="label">自加图片（custom）</span></label>
+          </div>
+          <label class="field" style="margin-top:14px"><span>pjsk 容量上限（FIFO，下次更新生效）</span>
+            <input type="number" id="setCap" min="1" max="9999"></label>
+          <div class="banner hidden" id="sourceStatus"></div>
+        </article>
+      </div>
+
+      <article class="card">
+        <div class="card-head">
+          <div><h2>图库更新</h2>
+            <div class="card-sub">间隔更新仅在本程序运行时执行；更新过程不阻塞界面</div></div>
+          <div class="spacer"></div>
+          <button type="button" class="btn primary" id="btnUpdate2">立即更新</button>
+        </div>
+        <div class="row" style="margin-bottom:14px">
+          <label class="switch"><input type="checkbox" id="setUpIntervalOn">
+            <span class="track"></span><span class="label">启用间隔更新</span></label>
+        </div>
+        <div class="field-row">
+          <label class="field"><span>更新间隔（分钟，1–10080）</span>
+            <input type="number" id="setUpInterval" min="1" max="10080"></label>
+          <label class="field"><span>每次张数（1–10）</span>
+            <input type="number" id="setUpCount" min="1" max="10"></label>
+          <label class="field"><span>最低稀有度（1–4）</span>
+            <input type="number" id="setUpRarity" min="1" max="4"></label>
+          <label class="field"><span>角色（留空=全部）</span>
+            <input type="text" id="setUpChara" placeholder="如 奏 / kanade / 17"></label>
+          <label class="field"><span>组合（留空=全部）</span>
+            <input type="text" id="setUpUnit" placeholder="如 mmj / 25 / wxs"></label>
+        </div>
+        <div class="banner hidden" id="updateStatus"></div>
+      </article>
+
+      <div class="cards two">
+        <article class="card">
+          <div class="card-head"><div><h2>系统</h2>
+            <div class="card-sub">开机自启与快捷方式</div></div></div>
+          <div class="row" style="gap:20px">
+            <label class="switch"><input type="checkbox" id="setAutostart">
+              <span class="track"></span><span class="label">开机自启</span></label>
+            <button type="button" class="btn" id="btnShortcuts">创建/修复快捷方式</button>
+          </div>
+          <div class="banner hidden" id="sysStatus"></div>
+          <dl class="kv" style="margin-top:14px" id="sysInfo"></dl>
+        </article>
+
+        <article class="card">
+          <div class="card-head"><h2>关于</h2></div>
+          <p class="muted small">
+            本页是本机壁纸服务的控制台，页面关闭/刷新/浏览器崩溃都不会停止后台轮换。<br>
+            只有系统托盘菜单的「退出」才会结束后台进程。<br>
+            程序不联网、不开放局域网；界面资源全部本地加载。
+          </p>
+        </article>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 大图预览 -->
+<div class="modal hidden" id="lightbox">
+  <div class="box">
+    <div class="box-head">
+      <b id="lightboxTitle">预览</b>
+      <button type="button" class="btn ghost close" id="lightboxClose">关闭</button>
+    </div>
+    <div class="box-body"><img id="lightboxImg" alt=""></div>
+  </div>
+</div>
+
+<!-- 更新日志 -->
+<div class="modal hidden" id="logModal">
+  <div class="box">
+    <div class="box-head">
+      <b>图库更新日志</b>
+      <button type="button" class="btn ghost close" id="logClose">关闭</button>
+    </div>
+    <div class="box-body"><div class="log" id="logBody">加载中…</div></div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script>window.PJSK_TOKEN = "__PJSK_TOKEN__";</script>
+<script src="app.js"></script>
 </body>
 </html>

@@ -204,6 +204,61 @@ def read_update_log(lines: int = 80) -> list:
     return text[-max(1, int(lines)):]
 
 
+THUMB_DIR = CACHE_DIR / "thumbs"
+
+
+def path_to_image_id(path) -> str:
+    """把本地图片路径映射为受控 ID（仅限图库内）；否则返回 None。"""
+    try:
+        real = Path(path).resolve(strict=True)
+    except OSError:
+        return None
+    for src, base in _sources().items():
+        try:
+            root = base.resolve(strict=True)
+        except OSError:
+            continue
+        if real.parent == root and real.is_file():
+            return f"{src}/{real.name}"
+    return None
+
+
+def get_desktop_wallpaper():
+    """读取系统当前桌面壁纸路径（SPI_GETDESKWALLPAPER）；失败返回 None。"""
+    try:
+        SPI_GETDESKWALLPAPER = 0x0073
+        buf = ctypes.create_unicode_buffer(32768)
+        u32 = ctypes.windll.user32
+        u32.SystemParametersInfoW.argtypes = [ctypes.c_uint, ctypes.c_uint,
+                                              ctypes.c_wchar_p, ctypes.c_uint]
+        ok = u32.SystemParametersInfoW(SPI_GETDESKWALLPAPER, len(buf), buf, 0)
+        if ok and buf.value:
+            p = Path(buf.value)
+            if p.is_file():
+                return p
+    except OSError:
+        pass
+    return None
+
+
+def thumbnail(path: Path, width: int = 400) -> Path:
+    """按宽度等比生成缩略图，缓存于 cache/thumbs；用于图库网格按需加载。"""
+    key = f"{path.stem}__{path.stat().st_mtime_ns}__{width}.png"
+    dest = THUMB_DIR / key
+    if dest.is_file():
+        return dest
+    THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        if im.width > width:
+            h = max(1, round(im.height * width / im.width))
+            im = im.resize((width, h), Image.LANCZOS)
+        tmp = dest.with_name(dest.name + ".tmp")
+        im.save(tmp, format="PNG")
+    os.replace(tmp, dest)
+    return dest
+
+
 def system_info(screen=None) -> dict:
     """只读系统信息，供 Web UI 展示（不含任何可写权限）。"""
     return {

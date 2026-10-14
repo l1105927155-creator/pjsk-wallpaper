@@ -129,7 +129,7 @@ class _Handler(BaseHTTPRequestHandler):
             if not self._query_token_ok(qs):
                 self._error(403, "缺少或无效的请求令牌")
                 return
-            self._serve_image(unquote(path[len("/api/images/"):]))
+            self._serve_image(unquote(path[len("/api/images/"):]), qs)
             return
 
         if path.startswith("/api/"):
@@ -232,11 +232,22 @@ class _Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------- 图片 / 上传
 
-    def _serve_image(self, image_id):
+    def _serve_image(self, image_id, qs=None):
         p = self.rt.resolve_image(image_id)
         if p is None:
             self._error(404, "图片不存在")
             return
+        # 可选缩略图（图库网格按需加载，避免一次拉全量原图）
+        try:
+            w = int((qs or {}).get("w", ["0"])[0] or 0)
+        except ValueError:
+            w = 0
+        if w:
+            w = max(40, min(1024, w))
+            try:
+                p = core.thumbnail(p, w)
+            except Exception:
+                pass
         ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
         try:
             data = p.read_bytes()

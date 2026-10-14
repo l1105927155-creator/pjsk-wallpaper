@@ -10,6 +10,8 @@
 
 本模块不 import tkinter，可在无 GUI 的进程里长期运行。
 """
+import json
+import os
 import random
 import subprocess
 import sys
@@ -68,6 +70,30 @@ class Runtime:
         self._thread = None
         self._tick = max(1, int(tick_seconds))
         self._status = "就绪"
+        # 当前壁纸（受控 ID），用于概览预览；存于 runtime/state.json 以跨进程重启保留
+        self._last_state_path = core.APP_DIR / "runtime" / "state.json"
+        saved = self._load_last_state()
+        self._desk_current = saved.get("desktop") or core.path_to_image_id(
+            core.get_desktop_wallpaper())
+        self._lock_current = saved.get("lock")
+
+    def _load_last_state(self) -> dict:
+        try:
+            data = json.loads(self._last_state_path.read_text("utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_last_state(self):
+        try:
+            self._last_state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._last_state_path.with_name("state.json.tmp")
+            tmp.write_text(json.dumps({"desktop": self._desk_current,
+                                       "lock": self._lock_current},
+                                      ensure_ascii=False), "utf-8")
+            os.replace(tmp, self._last_state_path)
+        except OSError:
+            pass
 
     # ------------------------------------------------------------------ 生命周期
 
@@ -154,6 +180,7 @@ class Runtime:
                 "last": self._desk_last,
                 "next": desk_next,
                 "busy": self._desk_busy,
+                "current": self._public_current(self._desk_current),
             },
             "lock": {
                 "enabled": bool(cfg["lock"]["enabled"]),
@@ -161,6 +188,7 @@ class Runtime:
                 "last": self._lock_last,
                 "next": lock_next,
                 "busy": self._lock_busy,
+                "current": self._public_current(self._lock_current),
             },
             "gallery": counts,
             "update": {
@@ -178,6 +206,14 @@ class Runtime:
 
     def _set_status(self, msg: str):
         self._status = msg
+
+    @staticmethod
+    def _public_current(image_id):
+        """把受控 ID 转成前端可用的对象；无法识别时返回 None（前端展示占位）。"""
+        if not image_id or "/" not in image_id:
+            return None
+        source, name = image_id.split("/", 1)
+        return {"id": image_id, "source": source, "name": name}
 
     # ------------------------------------------------------------------ 配置
 
@@ -354,11 +390,15 @@ class Runtime:
                 return {"ok": False, "busy": False, "empty": False,
                         "name": pick.name, "error": str(e)}
             # 手动与定时一致：触发即重置该目标的计时器
+            cur = core.path_to_image_id(pick)
             with self._lock:
                 if target == "desktop":
                     self._desk_last = time.time()
+                    self._desk_current = cur
                 else:
                     self._lock_last = time.time()
+                    self._lock_current = cur
+                self._save_last_state()
             self._set_status(f"{word} ✓ {pick.name}")
             return {"ok": True, "busy": False, "empty": False,
                     "name": pick.name, "error": ""}
