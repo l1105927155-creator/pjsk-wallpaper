@@ -75,12 +75,17 @@ def _identity_ok(port: int) -> bool:
 
 
 def _first_instance() -> bool:
-    """命名互斥体守卫；返回 False 表示已有实例在运行。"""
-    k32 = ctypes.windll.kernel32
+    """命名互斥体守卫；返回 False 表示已有实例在运行。
+
+    用 use_last_error=True 的 WinDLL + ctypes.get_last_error()，避免其它 ctypes
+    调用覆盖线程最后错误码导致误判。
+    """
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     ERROR_ALREADY_EXISTS = 183
     k32.CreateMutexW.restype = ctypes.c_void_p
+    k32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
     globals()["_mutex"] = k32.CreateMutexW(None, False, MUTEX_NAME)
-    return k32.GetLastError() != ERROR_ALREADY_EXISTS
+    return ctypes.get_last_error() != ERROR_ALREADY_EXISTS
 
 
 class Launcher:

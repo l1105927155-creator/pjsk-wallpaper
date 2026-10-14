@@ -2,6 +2,7 @@
 """启动器单实例与实例身份校验测试（不打开浏览器、不启动托盘）。"""
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -41,8 +42,11 @@ class LauncherTest(unittest.TestCase):
             self.addCleanup(p.stop)
 
     def test_single_instance_guard(self):
-        self.assertTrue(launcher._first_instance())
-        self.assertFalse(launcher._first_instance())   # 同进程再次调用 = 已有实例
+        # 用本进程独有的互斥体名，避免与用户机器上真实运行的实例相互干扰
+        name = f"pjsk-wallpaper-test-{os.getpid()}"
+        with mock.patch.object(launcher, "MUTEX_NAME", name):
+            self.assertTrue(launcher._first_instance())
+            self.assertFalse(launcher._first_instance())  # 同进程再次调用 = 已有实例
 
     def test_open_app_window_falls_back_to_default_browser(self):
         with mock.patch.object(launcher, "_browser_candidates", lambda: []), \

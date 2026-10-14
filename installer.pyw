@@ -18,12 +18,14 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 
+import win_startup
+
 SRC = Path(__file__).resolve().parent
 # 安装所需的最小文件集（不含 config/library/cache/logs 等运行产物）
 INSTALL_FILES = [
     "launcher.pyw", "server.py", "runtime.py", "gallery_update.py",
-    "core.py", "tray.py", "set_lockscreen.ps1", "start.bat", "requirements.txt",
-    "icon.png", "icon.ico", "README.md",
+    "core.py", "tray.py", "win_startup.py", "set_lockscreen.ps1",
+    "start.bat", "requirements.txt", "icon.png", "icon.ico", "README.md",
 ]
 # 需要整目录复制的静态资源
 INSTALL_DIRS = ["app"]
@@ -281,11 +283,11 @@ class Wizard(tk.Tk):
                 self._create_shortcuts(dest)
             except Exception as e:
                 errors.append(f"创建快捷方式失败：{e}")
-        if self.var_autostart.get():
-            try:
-                self._set_autostart(dest)
-            except Exception as e:
-                errors.append(f"设置开机自启失败：{e}")
+        # 开机自启：勾选与否都要落地（未勾选=清除遗留项），保证与安装选择一致
+        try:
+            self._set_autostart(dest, self.var_autostart.get())
+        except Exception as e:
+            errors.append(f"设置开机自启失败：{e}")
         if self.var_launch.get():
             try:
                 self._launch(dest)
@@ -325,12 +327,9 @@ class Wizard(tk.Tk):
         if r.returncode != 0:
             raise RuntimeError((r.stderr or b"").decode("mbcs", "replace").strip())
 
-    def _set_autostart(self, dest: Path):
-        import winreg
-        key = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as k:
-            val = f'"{self._pythonw()}" "{dest / "launcher.pyw"}"'
-            winreg.SetValueEx(k, "pjsk-wallpaper", 0, winreg.REG_SZ, val)
+    def _set_autostart(self, dest: Path, on: bool):
+        """按向导勾选写入/清除自启项（与运行时共用 win_startup 实现）。"""
+        win_startup.write(bool(on), f'"{self._pythonw()}" "{dest / "launcher.pyw"}"')
 
     def _launch(self, dest: Path):
         subprocess.Popen([self._pythonw(), str(dest / "launcher.pyw")],

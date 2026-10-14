@@ -14,6 +14,8 @@ from pathlib import Path
 
 from PIL import Image
 
+import win_startup
+
 APP_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = APP_DIR / "config.json"
 LIB_DIR = APP_DIR / "library"
@@ -21,7 +23,7 @@ PJSK_DIR = LIB_DIR / "pjsk"
 CUSTOM_DIR = LIB_DIR / "custom"
 CACHE_DIR = APP_DIR / "cache"
 LOCKSCREEN_PS1 = APP_DIR / "set_lockscreen.ps1"
-RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_KEY = win_startup.RUN_KEY
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
@@ -359,24 +361,12 @@ def set_lockscreen(path: Path, timeout: int = 30):
 # ---------- 开机自启（HKCU Run） ----------
 
 def set_autostart(on: bool):
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
-        if on:
-            val = f'"{sys.executable}" "{APP_DIR / "launcher.pyw"}"'
-            winreg.SetValueEx(k, "pjsk-wallpaper", 0, winreg.REG_SZ, val)
-        else:
-            try:
-                winreg.DeleteValue(k, "pjsk-wallpaper")
-            except FileNotFoundError:
-                pass
+    """应用内切换开机自启：写入/清除 HKCU Run 项（实现见 win_startup）。"""
+    win_startup.write(bool(on), win_startup.command_for(APP_DIR))
 
 
 def autostart_on() -> bool:
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
-            winreg.QueryValueEx(k, "pjsk-wallpaper")
-            return True
-    except OSError:
-        return False
+    return win_startup.is_on()
 
 
 # ---------- 托盘图标资源 ----------
