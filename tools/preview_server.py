@@ -15,6 +15,7 @@
 import json
 import sys
 import tempfile
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -26,6 +27,13 @@ import runtime as runtime_mod  # noqa: E402
 import server as server_mod  # noqa: E402
 
 DEFAULT_PORT = 8799
+SPI_DELAY = 0.8      # 模拟 SystemParametersInfoW 阻塞到 shell 开始淡入的耗时
+
+
+def _fake_set_desktop(path):
+    """真实的 SPI_SETDESKWALLPAPER（带淡入）会阻塞到 shell 开始过渡，
+    这里用等长延时复现该阻塞，用来验证「预览没有等它返回才更新」。"""
+    time.sleep(SPI_DELAY)
 
 
 def main():
@@ -44,7 +52,7 @@ def main():
     }, ensure_ascii=False, indent=2), "utf-8")
 
     mock.patch.object(core, "CONFIG_PATH", cfg_path).start()
-    mock.patch.object(core, "set_desktop", lambda p: None).start()
+    mock.patch.object(core, "set_desktop", _fake_set_desktop).start()
     mock.patch.object(core, "set_lockscreen", lambda p: None).start()
     mock.patch.object(core, "enable_desktop_fade", lambda: True).start()
 

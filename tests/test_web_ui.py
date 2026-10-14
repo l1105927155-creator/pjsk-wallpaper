@@ -123,6 +123,45 @@ class WebUiTest(unittest.TestCase):
         self.assertNotRegex(self.js, r"[A-Za-z]:\\\\")
         self.assertNotIn("file://", self.js)
 
+    # ------------------------------------------------- 预览与切换同步（过渡动画）
+
+    def test_preview_has_buffer_layer(self):
+        """交叉淡入需要两层：上层当前图、下层即将生效的新图。"""
+        for prefix in ("desk", "lock"):
+            self.assertIn(f'id="{prefix}ImgBuf"', self.html)
+            self.assertIn(f'class="wall-buf"', self.html)
+            self.assertIn(f'id="{prefix}Img" class="wall-cur', self.html)
+            # 下层必须在上层之前（同为绝对定位，DOM 顺序决定叠放）
+            self.assertLess(self.html.index(f'id="{prefix}ImgBuf"'),
+                            self.html.index(f'id="{prefix}Img"'))
+            self.assertIn(f'$(prefix + "ImgBuf")', self.js)
+
+    def test_fade_duration_matches_between_css_and_js(self):
+        """过渡时长必须一致，否则两处会各自漂移。"""
+        css = re.search(r"--wall-fade:\s*(\d+)ms", self.css)
+        js = re.search(r"WALL_FADE_MS\s*=\s*(\d+)", self.js)
+        self.assertIsNotNone(css, "styles.css 缺少 --wall-fade")
+        self.assertIsNotNone(js, "app.js 缺少 WALL_FADE_MS")
+        self.assertEqual(css.group(1), js.group(1))
+
+    def test_fade_rule_only_on_target_state(self):
+        """transition 只写在 .fading 上：淡出走过渡，恢复不透明立即生效。"""
+        self.assertRegex(self.css, r"\.wall-cur\.fading\s*\{[^}]*opacity:\s*0")
+        self.assertRegex(self.css, r"\.wall-cur\.fading\s*\{[^}]*transition:[^}]*--wall-fade")
+        self.assertNotRegex(self.css, r"\.wall-cur\s*\{[^}]*transition:[^}]*--wall-fade")
+
+    def test_render_prefers_pending_then_current(self):
+        """后端在写系统壁纸之前广播 pending，前端要优先用它，
+        否则预览只能等切换完成后才更新（即「晚一步」）。"""
+        self.assertIn("w.pending || w.current", self.js)
+        self.assertIn("function setWall(prefix, url)", self.js)
+
+    def test_state_polling_is_long_poll(self):
+        """轮询改为带修订号的长轮询：变化即返回，取代固定周期。"""
+        self.assertIn('api("/api/state" + q)', self.js)
+        self.assertIn('"?since=" + S.rev + "&wait=" + POLL_WAIT', self.js)
+        self.assertNotIn("POLL_MS", self.js, "固定周期轮询应已被长轮询取代")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@ import json
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -63,8 +64,8 @@ class ServerTest(unittest.TestCase):
     # ------------------------------------------------------------- helpers
 
     def req(self, method, path, body=None, token=True, host=None, origin=None,
-            ctype="application/json", raw=None):
-        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            ctype="application/json", raw=None, timeout=5):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
         headers = {}
         if host:
             headers["Host"] = host
@@ -96,6 +97,53 @@ class ServerTest(unittest.TestCase):
         status, body = self.req("GET", "/api/state")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["gallery"]["total"], 2)
+
+    def test_state_long_poll_returns_immediately_on_change(self):
+        """带 since 时挂起，切换一发生就立刻返回新快照。
+
+        这是预览能与系统切换同步的机制：前端不再等固定周期轮询，
+        而是被后端在状态变化的同一时刻唤醒。
+        """
+        status, body = self.req("GET", "/api/state")
+        rev0 = json.loads(body)["rev"]
+        box = {}
+
+        def waiter():
+            t0 = time.time()
+            st, bd = self.req("GET", f"/api/state?since={rev0}&wait=8", timeout=15)
+            box["status"] = st
+            box["rev"] = json.loads(bd)["rev"]
+            box["elapsed"] = time.time() - t0
+
+        t = threading.Thread(target=waiter)
+        t.start()
+        time.sleep(0.4)                      # 确保长轮询已经挂起
+        self.req("POST", "/api/wallpaper/desktop/next", body={})
+        t.join(10)
+        self.assertEqual(box.get("status"), 200, box)
+        self.assertGreater(box["rev"], rev0)
+        self.assertLess(box["elapsed"], 5, "变化后应立刻返回，而不是等满 wait")
+
+    def test_state_long_poll_times_out_without_change(self):
+        status, body = self.req("GET", "/api/state")
+        rev0 = json.loads(body)["rev"]
+        t0 = time.time()
+        status, body = self.req("GET", f"/api/state?since={rev0}&wait=0.6", timeout=15)
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(time.time() - t0, 0.5)
+        self.assertEqual(json.loads(body)["rev"], rev0)
+
+    def test_state_without_since_returns_at_once(self):
+        t0 = time.time()
+        status, body = self.req("GET", "/api/state?wait=8", timeout=15)
+        self.assertEqual(status, 200)
+        self.assertLess(time.time() - t0, 2, "不带 since 必须立即返回")
+        self.assertIn("rev", json.loads(body))
+
+    def test_state_bad_since_falls_back_to_immediate(self):
+        status, body = self.req("GET", "/api/state?since=abc", timeout=15)
+        self.assertEqual(status, 200)
+        self.assertIn("rev", json.loads(body))
 
     def test_bad_host_rejected(self):
         status, _ = self.req("GET", "/api/state", host="evil.example.com:1234")

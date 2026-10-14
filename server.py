@@ -189,7 +189,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _api_get(self, path, qs):
         if path == "/api/state":
-            self._send_json(self.rt.state())
+            self._send_json(self._state_response(qs))
         elif path == "/api/config/export":
             self._send_json(self.rt.export_config())
         elif path == "/api/gallery":
@@ -207,6 +207,29 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(core.system_info(self.rt.config().get("screen")))
         else:
             self._error(404, "not found")
+
+    def _state_response(self, qs):
+        """状态快照；带 `since` 时改为长轮询。
+
+        - 不带 `since`：立即返回（首次加载、动作后的显式刷新）。
+        - 带 `since`：挂起，直到状态修订号变化或 `wait` 秒超时。
+          前端据此在切换/配置变更发生的同一时刻刷新预览，
+          取代固定周期轮询（那正是预览滞后于桌面背景的原因）。
+        """
+        raw = (qs.get("since") or [""])[0]
+        if raw == "":
+            return self.rt.state()
+        try:
+            since = int(raw)
+        except ValueError:
+            return self.rt.state()
+        try:
+            wait = float((qs.get("wait") or [""])[0] or 0) or None
+        except ValueError:
+            wait = None
+        if wait is None:
+            return self.rt.wait_state(since)
+        return self.rt.wait_state(since, wait)
 
     def _api_post(self, path, payload):
         if path == "/api/config":

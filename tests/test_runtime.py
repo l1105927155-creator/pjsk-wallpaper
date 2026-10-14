@@ -144,6 +144,91 @@ class SwitchTest(RuntimeBase):
         self.assertIn("boom", res["error"])
 
 
+class StatePushTest(RuntimeBase):
+    """预览与系统切换保持同步的机制：状态修订号、长轮询、切换前广播 pending。"""
+
+    def _runtime(self):
+        r = rt.Runtime(tick_seconds=9999)
+        r._save_last_state = lambda: None      # 不写真实的 runtime/state.json
+        return r
+
+    def test_state_exposes_rev_and_pending(self):
+        r = self._runtime()
+        s = r.state()
+        self.assertIn("rev", s)
+        self.assertIsNone(s["desktop"]["pending"])
+        self.assertIsNone(s["lock"]["pending"])
+
+    def test_pending_is_broadcast_before_wallpaper_is_written(self):
+        """核心时序：写系统壁纸之前就要把新图广播出去。
+
+        core.set_desktop 会阻塞到 shell 开始淡入；若等它返回再通知前端，
+        预览必然滞后一整段过渡——这正是「背景过渡结束后预览才切换」的根因。
+        """
+        self._files(3)
+        r = self._runtime()
+        marks = []
+
+        def fake_set_desktop(_path):
+            marks.append(time.time())
+            time.sleep(0.3)      # 真实 SPI_SETDESKWALLPAPER 会阻塞到 shell 开始淡入
+
+        got = {}
+
+        def watcher(rev):
+            st = r.wait_state(rev, 5)
+            got["pending"] = st["desktop"]["pending"]
+            got["at"] = time.time()
+
+        with mock.patch.object(core, "set_desktop", fake_set_desktop), \
+                mock.patch.object(core, "enable_desktop_fade", lambda: True):
+            t = threading.Thread(target=watcher, args=(r.revision(),))
+            t.start()
+            time.sleep(0.1)
+            res = r.switch("desktop", manual=True)
+            t.join(5)
+
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(len(marks), 1, "应只调用一次写壁纸")
+        self.assertIsNotNone(got.get("pending"), "切换前应先广播 pending")
+        self.assertEqual(got["pending"]["id"], "pjsk/" + res["name"])
+        self.assertLess(got["at"], marks[0] + 0.15,
+                        "广播应发生在写系统壁纸开始前后，而不是等它返回（阻塞约 0.3s）")
+        # 结束后 pending 清空，current 收敛为新图
+        st = r.state()
+        self.assertIsNone(st["desktop"]["pending"])
+        self.assertEqual(st["desktop"]["current"]["id"], "pjsk/" + res["name"])
+
+    def test_rev_advances_on_config_and_switch(self):
+        self._files(2)
+        r = self._runtime()
+        rev0 = r.revision()
+        r.apply_config({"desktop": {"interval": 45}})
+        rev1 = r.revision()
+        self.assertGreater(rev1, rev0)
+        with mock.patch.object(core, "set_desktop", lambda p: None), \
+                mock.patch.object(core, "enable_desktop_fade", lambda: True):
+            r.switch("desktop", manual=True)
+        self.assertGreater(r.revision(), rev1)
+
+    def test_wait_state_times_out_when_nothing_changes(self):
+        r = self._runtime()
+        t0 = time.time()
+        r.wait_state(r.revision(), 0.4)
+        self.assertGreaterEqual(time.time() - t0, 0.3)
+
+    def test_failed_switch_clears_pending(self):
+        """切换失败也不能把界面卡在「正在应用」上。"""
+        self._files(2)
+        r = self._runtime()
+        with mock.patch.object(core, "enable_desktop_fade", lambda: True), \
+                mock.patch.object(core, "set_desktop",
+                                  side_effect=OSError("boom")):
+            res = r.switch("desktop", manual=True)
+        self.assertFalse(res["ok"])
+        self.assertIsNone(r.state()["desktop"]["pending"])
+
+
 class SchedulerTest(RuntimeBase):
     def test_due_switches_desktop_and_lock_separately(self):
         self._files(2)

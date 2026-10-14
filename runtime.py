@@ -26,6 +26,8 @@ import core
 TICK_SECONDS = 20          # 与旧版 tick 周期一致
 LOG_TAIL_LINES = 200
 EXPORT_VERSION = 1         # 设置文件格式版本
+STATE_WAIT_MAX = 25        # /api/state 长轮询最长挂起秒数
+PREVIEW_WIDTH = 1024       # 概览预览的缩略图宽度（与前端 imgUrl(id, 1024) 一致）
 
 # 可写字段的合法范围（与旧版 Spinbox 范围一致）
 _INT_RANGES = {
@@ -57,6 +59,11 @@ class Runtime:
 
     def __init__(self, tick_seconds: int = TICK_SECONDS):
         self._lock = threading.RLock()
+        # 状态修订号：任何会影响前端的变更都 +1 并唤醒等待中的长轮询，
+        # 使前端能在变更发生的同一时刻刷新，而不必等下一次定时轮询。
+        self._cv = threading.Condition(self._lock)
+        self._rev = 0
+        self._pending = {"desktop": None, "lock": None}   # 正在应用的目标（受控 ID）
         self._cfg = core.config_load()
         self._rng = random.Random()
         self._desk_rot = core.Rotator()
@@ -165,6 +172,30 @@ class Runtime:
 
     # ------------------------------------------------------------------ 状态
 
+    def _bump(self):
+        """标记状态已变化并唤醒等待中的长轮询。调用方需持有 self._lock。"""
+        self._rev += 1
+        self._cv.notify_all()
+
+    def revision(self) -> int:
+        with self._lock:
+            return self._rev
+
+    def wait_state(self, since: int, timeout: float = STATE_WAIT_MAX) -> dict:
+        """长轮询：直到状态修订号不等于 `since`，或挂起超时，才返回最新快照。
+
+        前端带着自己已知的修订号来等，切换/配置/更新任一发生即被唤醒，
+        因此预览能在系统壁纸开始过渡的同一时刻更新。
+        """
+        try:
+            timeout = max(0.0, min(float(timeout), float(STATE_WAIT_MAX)))
+        except (TypeError, ValueError):
+            timeout = float(STATE_WAIT_MAX)
+        with self._cv:
+            if int(since) == self._rev:
+                self._cv.wait(timeout)
+        return self.state()
+
     def state(self) -> dict:
         """给前端/托盘的完整状态快照（不含任何绝对路径以外的可写能力）。"""
         now = time.time()
@@ -179,9 +210,12 @@ class Runtime:
                          if self._lock_last else None)
             up_next = (self._up_anchor + int(up["interval"]) * 60
                        if up.get("interval_enabled") else None)
+            rev = self._rev
+            pend = dict(self._pending)
         counts = core.library_counts()
         return {
             "server_time": now,
+            "rev": rev,
             "status": self._status,
             "config": cfg,
             "desktop": {
@@ -191,6 +225,7 @@ class Runtime:
                 "next": desk_next,
                 "busy": self._desk_busy,
                 "current": self._public_current(self._desk_current),
+                "pending": pend["desktop"],
             },
             "lock": {
                 "enabled": bool(cfg["lock"]["enabled"]),
@@ -199,6 +234,7 @@ class Runtime:
                 "next": lock_next,
                 "busy": self._lock_busy,
                 "current": self._public_current(self._lock_current),
+                "pending": pend["lock"],
             },
             "gallery": counts,
             "update": {
@@ -215,7 +251,9 @@ class Runtime:
         }
 
     def _set_status(self, msg: str):
-        self._status = msg
+        with self._lock:
+            self._status = msg
+            self._bump()
 
     @staticmethod
     def _public_current(image_id):
@@ -349,6 +387,7 @@ class Runtime:
             if now_on and not was_on:
                 self._up_anchor = time.time()
             self._cfg = new
+            self._bump()
         core.config_save(self._cfg)
         return True, [], warnings
 
@@ -484,6 +523,21 @@ class Runtime:
                 return {"ok": False, "busy": False, "empty": True,
                         "name": None, "error": "图库为空"}
             word = "桌面" if target == "desktop" else "锁屏"
+            # 先广播「正在应用」再写系统壁纸。
+            # core.set_desktop 里的 SystemParametersInfo 会阻塞到 shell 开始淡入，
+            # 若等它返回再通知前端，预览必然整体滞后一整段过渡——这正是
+            # 「背景过渡结束后预览才切换」的根因。这里让前端与系统同时开始过渡。
+            cur = core.path_to_image_id(pick)
+            # 预热预览缩略图：某张图第一次上屏时后端要现算 1024px 缩略图（约 0.2s），
+            # 若等前端来取才生成，预览就会晚于桌面起步。先备好再广播，
+            # 两者真正同一时刻开始过渡；已缓存时这次调用近乎零成本。
+            try:
+                core.thumbnail(pick, PREVIEW_WIDTH)
+            except Exception:
+                pass
+            with self._lock:
+                self._pending[target] = self._public_current(cur)
+                self._bump()
             try:
                 if target == "desktop":
                     core.enable_desktop_fade()
@@ -496,7 +550,6 @@ class Runtime:
                 return {"ok": False, "busy": False, "empty": False,
                         "name": pick.name, "error": str(e)}
             # 手动与定时一致：触发即重置该目标的计时器
-            cur = core.path_to_image_id(pick)
             with self._lock:
                 if target == "desktop":
                     self._desk_last = time.time()
@@ -510,10 +563,12 @@ class Runtime:
                     "name": pick.name, "error": ""}
         finally:
             with self._lock:
+                self._pending[target] = None
                 if target == "desktop":
                     self._desk_busy = False
                 else:
                     self._lock_busy = False
+                self._bump()
 
     # ------------------------------------------------------------------ 图库
 
@@ -556,6 +611,7 @@ class Runtime:
             self._update["last_run"] = now
             self._up_anchor = now
             self._cfg["update"]["last_run"] = now
+            self._bump()
         core.config_save(self._cfg)
         threading.Thread(target=self._run_update, name="gallery-update",
                          daemon=True).start()
@@ -586,6 +642,7 @@ class Runtime:
         with self._lock:
             self._update.update(running=False, finished_at=time.time(),
                                 ok=ok, message=msg)
+            self._bump()
         self._set_status(msg)
 
     def update_status(self) -> dict:

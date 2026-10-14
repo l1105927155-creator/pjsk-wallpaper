@@ -6,7 +6,6 @@
   "use strict";
 
   var TOKEN = window.PJSK_TOKEN || "";
-  var POLL_MS = 3000;
   var PAGE_SIZE = 24;
 
   // ---------------------------------------------------------------- 工具
@@ -95,6 +94,9 @@
   var S = null;            // 最近一次 /api/state 的返回
   var offset = 0;          // server_time - 本地时间（秒），用于倒计时校准
   var connected = false;
+  var pollTimer = null;    // 长轮询重排计时器
+  var pollSeq = 0;         // 请求序号：只认最后一次发出的请求的响应
+  var POLL_WAIT = 25;      // 长轮询挂起秒数（与后端 STATE_WAIT_MAX 对应）
 
   function setPill(kind, text) {
     var el = $("statusPill");
@@ -102,20 +104,38 @@
     el.textContent = text;
   }
 
+  function schedulePoll(delay) {
+    if (pollTimer) { clearTimeout(pollTimer); }
+    pollTimer = setTimeout(loadState, delay || 0);
+  }
+
+  /* 取状态：首次与动作后立即返回；之后带上已知修订号长轮询，
+     后端在状态变化的同一时刻唤醒它。
+     这样「切换壁纸」时前端能立刻拿到新图并开始过渡，
+     而不是等下一次固定周期轮询——那正是预览比桌面晚一步的原因。 */
   function loadState() {
-    return api("/api/state").then(function (r) {
+    var mine = ++pollSeq;
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    var q = (connected && S && typeof S.rev === "number")
+      ? "?since=" + S.rev + "&wait=" + POLL_WAIT : "";
+    return api("/api/state" + q).then(function (r) {
+      if (mine !== pollSeq) { return; }
       if (r.status !== 200) {
         connected = false;
         setPill("err", r.status === 403 ? "令牌无效，请从托盘重新打开" : "服务不可用");
+        schedulePoll(2000);
         return;
       }
       connected = true;
       S = r.body;
       offset = (S.server_time || Date.now() / 1000) - Date.now() / 1000;
       render(S);
+      schedulePoll();
     }).catch(function () {
+      if (mine !== pollSeq) { return; }
       connected = false;
       setPill("err", "连接中断");
+      schedulePoll(2000);
     });
   }
 
@@ -169,19 +189,86 @@
     tickCountdown();
   }
 
+  // ------------------------------------------------- 壁纸预览（与切换同步）
+
+  // 与 styles.css 的 --wall-fade 必须一致。
+  // Windows 换壁纸的 shell 淡入时长未公开，取观感接近的固定值。
+  var WALL_FADE_MS = 600;
+  var wallSeq = { desk: 0, lock: 0 };
+
+  /* 预览换图，并做与桌面背景相同的交叉淡入。
+     两层设计：上层是当前图，下层是即将生效的新图。
+     新图先整幅就位，再让上层淡出把它「揭」出来 —— 这就是一次交叉过渡，
+     且角色不互换，<prefix>Img 始终代表当前壁纸。 */
+  function setWall(prefix, url) {
+    var cur = $(prefix + "Img"), buf = $(prefix + "ImgBuf");
+    if (!url) {                                   // 无图：两层都清空
+      wallSeq[prefix]++;
+      cur.classList.add("hidden");
+      cur.classList.remove("fading");
+      cur.dataset.url = "";
+      cur.removeAttribute("src");
+      buf.classList.remove("show");
+      buf.removeAttribute("src");
+      return;
+    }
+    if (url === cur.dataset.url) { return; }       // 已经是当前图，不动
+
+    if (!cur.dataset.url) {                        // 首图：没有旧图可淡出
+      cur.dataset.url = url;
+      cur.setAttribute("src", url);
+      cur.classList.remove("hidden", "fading");
+      return;
+    }
+
+    var my = ++wallSeq[prefix];                    // 连点「下一张」时只认最后一次
+    var settle = function () {
+      // 过渡结束：把新图搬到上层并立即恢复不透明。
+      // 此刻下层是同图，即使上层还没绘制完也看不出跳变。
+      cur.dataset.url = url;
+      cur.classList.remove("fading");
+      var done = function () {
+        cur.onload = cur.onerror = null;
+        if (wallSeq[prefix] !== my) { return; }
+        buf.classList.remove("show");              // 上层已就位，撤掉下层，不留重影
+        buf.removeAttribute("src");
+      };
+      cur.onload = cur.onerror = done;
+      cur.setAttribute("src", url);
+      if (cur.complete && cur.naturalWidth) { done(); }
+    };
+    var ready = function (ok) {
+      buf.onload = buf.onerror = null;
+      if (wallSeq[prefix] !== my) { return; }
+      if (!ok) {                                   // 新图取不到：保留当前图，不做过渡
+        buf.classList.remove("show");
+        buf.removeAttribute("src");
+        return;
+      }
+      buf.classList.add("show");                   // 新图就位（下层，无过渡）
+      cur.classList.add("fading");                 // 旧图淡出，揭示新图
+      setTimeout(function () {
+        if (wallSeq[prefix] !== my) { return; }
+        settle();
+      }, WALL_FADE_MS + 50);
+    };
+    buf.onload = function () { ready(true); };
+    buf.onerror = function () { ready(false); };
+    buf.setAttribute("src", url);
+  }
+
   function renderWall(prefix, w) {
-    var img = $(prefix + "Img"), ph = $(prefix + "Placeholder"),
-        badge = $(prefix + "Badge");
-    if (w.current && w.current.id) {
-      var url = imgUrl(w.current.id, 1024);
-      if (img.getAttribute("src") !== url) { img.setAttribute("src", url); }
-      img.classList.remove("hidden");
+    var ph = $(prefix + "Placeholder"), badge = $(prefix + "Badge");
+    // 应用中的目标优先：后端在写系统壁纸之前就广播了它，
+    // 预览因此与系统过渡同一时刻开始，而不是等切换完成后才补上。
+    var show = w.pending || w.current;
+    if (show && show.id) {
+      setWall(prefix, imgUrl(show.id, 1024));
       ph.classList.add("hidden");
-      badge.textContent = w.current.name;
+      badge.textContent = show.name;
       badge.classList.remove("hidden");
     } else {
-      img.classList.add("hidden");
-      img.removeAttribute("src");
+      setWall(prefix, "");
       ph.classList.remove("hidden");
       badge.classList.add("hidden");
     }
@@ -748,11 +835,8 @@
   function boot() {
     bindTabs();
     bindAll();
+    // loadState 自身会用长轮询接力，无需再挂定时器
     loadState().then(loadGallery);
-    setInterval(function () {
-      if (document.hidden) { return; }   // 页面不可见时暂停轮询
-      loadState();
-    }, POLL_MS);
   }
 
   if (document.readyState === "loading") {

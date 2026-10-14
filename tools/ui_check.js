@@ -29,9 +29,21 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const PROBE = `(function(){
   function t(id){ var e = document.getElementById(id); return e ? e.textContent : null; }
   var img = document.getElementById('deskImg');
+  var buf = document.getElementById('deskImgBuf');
   var lock = document.getElementById('lockImg');
+  function vis(e){
+    if (!e) return null;
+    var cs = getComputedStyle(e);
+    return e.classList.contains('show') && cs.display !== 'none';
+  }
   return JSON.stringify({
     src: img ? img.getAttribute('src') : null,
+    cls: img ? img.className : null,
+    opacity: img ? Number(getComputedStyle(img).opacity) : null,
+    bufVisible: vis(buf),
+    bufHasSrc: !!(buf && buf.getAttribute('src')),
+    // 可见图层数：过渡结束后应当只剩 1 个可见层，不能留下重影
+    visibleLayers: (buf && vis(buf) ? 1 : 0) + (img && !img.classList.contains('hidden') ? 1 : 0),
     badge: t('deskBadge'), last: t('deskLast'), next: t('deskNextTime'),
     lockBadge: t('lockBadge'),
     pill: t('statusPill'),
@@ -101,6 +113,10 @@ async function main() {
   console.log(`目标: ${APP}\n`);
   await send('Runtime.enable');
   await send('Page.enable');
+  // 固定视口：默认的无头窗口只有 800×600，「下一张」按钮会掉到折线以下，
+  // elementFromPoint 返回 null，真实鼠标点击就永远打不到按钮上。
+  await send('Emulation.setDeviceMetricsOverride',
+    { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
   await send('Page.navigate', { url: APP });
   await sleep(3500);
 
@@ -158,30 +174,67 @@ async function main() {
   await mouse('mouseMoved');
   await mouse('mousePressed', { buttons: 1 });
   await mouse('mouseReleased', { buttons: 0 });
+
+  // 密集采样上层透明度：硬切会一直是 1（或直接跳到新图），
+  // 只有真的走了过渡才会采到 0 与 1 之间的中间态。
+  const samples = [];
+  for (let i = 0; i < 40; i++) {
+    samples.push(await evaluate(`(function(){
+      var c = document.getElementById('deskImg');
+      var b = document.getElementById('deskImgBuf');
+      return getComputedStyle(c).opacity + '|' +
+             (c.classList.contains('fading') ? 'fading' : '-') + '|' +
+             (b.classList.contains('show') ? 'buf' : '-');
+    })()`));
+    await sleep(60);
+  }
+  const mid = samples.map(s => Number(s.split('|')[0])).filter(o => o > 0.02 && o < 0.98);
+  const sawFading = samples.some(s => s.indexOf('|fading|') >= 0);
+
   await waitFor(async () => {
     const p = await probe();
     return p.badge !== a.badge && p.loaded === true;
   }, 10000);
+  // 过渡结束后下层必须被撤掉，不能留下两份可见图层
+  await waitFor(async () => (await probe()).visibleLayers === 1, 4000);
   const b = await probe();
   console.log('    ' + JSON.stringify(b));
   check('真实点击后返回了新图片且界面已刷新', b.badge !== a.badge,
         `${a.badge} -> ${b.badge}`);
+  check('预览切换有过渡动画（采到淡出的中间透明度）',
+        mid.length > 0 && sawFading,
+        `采样 ${samples.length} 次，中间态 ${mid.length} 次，fading ${sawFading}`);
+  check('过渡结束后不留重影（可见图层只剩 1 个）', b.visibleLayers === 1,
+        'visibleLayers=' + b.visibleLayers + ' bufVisible=' + b.bufVisible);
   check('上一次/下一次时间已更新', b.last !== a.last);
   check('「下一次切换」显示的是时间而不是按钮文字', /^\d\d-\d\d \d\d:\d\d:\d\d$|^—|^即将执行/.test(b.next || ''),
         'next=' + b.next);
   check('新预览图已加载', b.loaded === true);
 
-  console.log('\n[3] 外部改状态后页面应自行追上（3 秒轮询）');
+  console.log('\n[3] 预览与「写系统壁纸」同时开始，而不是等它返回（长轮询推送）');
   const before = await probe();
-  await evaluate(`(async function(){
+  const seq = await evaluate(`(async function(){
+    var img = document.getElementById('deskImg');
+    var t0 = performance.now(), tSrc = null;
+    var mo = new MutationObserver(function(){
+      if (tSrc === null) { tSrc = performance.now(); }
+    });
+    mo.observe(img, { attributes: true, attributeFilter: ['src', 'class'] });
     await fetch('/api/wallpaper/desktop/next', { method:'POST',
       headers:{'X-Pjsk-Token': window.PJSK_TOKEN, 'Content-Type':'application/json'},
       body:'{}' });
-    return 1;
+    var tDone = performance.now();
+    mo.disconnect();
+    return JSON.stringify({ tSrc: tSrc, tDone: tDone });
   })()`);
-  await sleep(4500);
+  const sq = JSON.parse(seq);
+  check('预览在「下一张」请求返回之前就已开始换图（同步推进，非事后补）',
+        sq.tSrc !== null && sq.tSrc < sq.tDone,
+        `预览 ${sq.tSrc === null ? '—' : sq.tSrc.toFixed(0)}ms < 响应 ${sq.tDone.toFixed(0)}ms`);
+  await sleep(2500);
   const c = await probe();
-  check('页面自动同步到最新状态', c.badge !== before.badge, `${before.badge} -> ${c.badge}`);
+  check('外部触发切换后页面自行同步到最新状态', c.badge !== before.badge,
+        `${before.badge} -> ${c.badge}`);
 
   console.log('\n[4] 页面 JS 异常');
   check('无未捕获异常', errors.length === 0, errors.join(' | '));
