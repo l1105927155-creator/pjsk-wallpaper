@@ -196,6 +196,41 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(data["total"], 1)
         self.assertEqual(data["items"][0]["id"], "custom/mine.png")
 
+    def test_gallery_bad_query_params_return_400(self):
+        for q in ("offset=abc", "offset=-1", "offset=1.5",
+                  "limit=abc", "limit=0", "limit=-5", "limit=100000",
+                  "offset=99999999999999999999"):
+            status, body = self.req("GET", f"/api/gallery?{q}")
+            self.assertEqual(status, 400, f"{q} 应返回 400")
+            data = json.loads(body)
+            self.assertFalse(data["ok"])
+            self.assertTrue(data["error"])
+        # 非法参数不得中断服务：后续正常请求照常可用
+        status, body = self.req("GET", "/api/gallery")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["total"], 2)
+        status, _ = self.req("GET", "/api/state")
+        self.assertEqual(status, 200)
+
+    def test_gallery_empty_and_duplicate_params_are_deterministic(self):
+        status, body = self.req("GET", "/api/gallery?offset=&limit=")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["offset"], 0)
+        self.assertEqual(data["limit"], 60)
+        status, body = self.req("GET", "/api/gallery?limit=1&limit=10")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["limit"], 1)   # 重复参数取第一个
+
+    def test_update_log_bad_lines_returns_400(self):
+        for q in ("lines=abc", "lines=0", "lines=-3", "lines=100000"):
+            status, body = self.req("GET", f"/api/gallery/update/log?{q}")
+            self.assertEqual(status, 400, f"{q} 应返回 400")
+            self.assertFalse(json.loads(body)["ok"])
+        status, body = self.req("GET", "/api/gallery/update/log?lines=5")
+        self.assertEqual(status, 200)
+        self.assertIn("lines", json.loads(body))
+
     def test_upload_valid_and_invalid(self):
         buf = io.BytesIO()
         Image.new("RGB", (10, 10), (9, 9, 9)).save(buf, format="PNG")

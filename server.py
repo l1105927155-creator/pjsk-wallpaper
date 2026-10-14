@@ -38,6 +38,35 @@ MAX_UPLOAD_BODY = 64 << 20       # 64 MiB
 MAX_UPLOAD_FILES = 20
 TOKEN_HEADER = "X-Pjsk-Token"
 
+# 查询参数的合法范围（分页/日志）
+MAX_QUERY_OFFSET = 10_000_000    # 分页偏移上限
+MAX_PAGE_LIMIT = 200             # 每页数量上限
+MAX_LOG_LINES = 1000             # 日志行数上限
+
+
+class _BadQuery(ValueError):
+    """查询参数非法；由调用方统一转成 400 与结构化错误。"""
+
+
+def _int_query(qs, name, default, minimum, maximum):
+    """解析整数查询参数。
+
+    - 缺省或空值（`?limit=`）→ 用默认值；
+    - 重复参数取第一个出现的值（行为确定，不做隐式合并）；
+    - 非整数、负数、超出 `[minimum, maximum]` → 抛 `_BadQuery`。
+    """
+    values = qs.get(name)
+    raw = (values[0] if values else "").strip()
+    if raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise _BadQuery(f"{name} 需要整数") from None
+    if not (minimum <= value <= maximum):
+        raise _BadQuery(f"{name} 需在 {minimum}–{maximum} 之间")
+    return value
+
 
 def _json_bytes(obj) -> bytes:
     return json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -188,25 +217,31 @@ class _Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------- API 实现
 
     def _api_get(self, path, qs):
-        if path == "/api/state":
-            self._send_json(self._state_response(qs))
-        elif path == "/api/config/export":
-            self._send_json(self.rt.export_config())
-        elif path == "/api/gallery":
-            self._send_json(self.rt.gallery_page(
-                offset=int((qs.get("offset") or ["0"])[0] or 0),
-                limit=int((qs.get("limit") or ["60"])[0] or 60),
-                source=(qs.get("source") or ["all"])[0],
-                keyword=(qs.get("keyword") or [""])[0]))
-        elif path == "/api/gallery/update/status":
-            self._send_json(self.rt.update_status())
-        elif path == "/api/gallery/update/log":
-            self._send_json({"lines": self.rt.update_log_tail(
-                int((qs.get("lines") or ["80"])[0] or 80))})
-        elif path == "/api/system":
-            self._send_json(core.system_info(self.rt.config().get("screen")))
-        else:
-            self._error(404, "not found")
+        try:
+            if path == "/api/state":
+                self._send_json(self._state_response(qs))
+            elif path == "/api/config/export":
+                self._send_json(self.rt.export_config())
+            elif path == "/api/gallery":
+                self._send_json(self.rt.gallery_page(
+                    offset=_int_query(qs, "offset", default=0,
+                                      minimum=0, maximum=MAX_QUERY_OFFSET),
+                    limit=_int_query(qs, "limit", default=60,
+                                     minimum=1, maximum=MAX_PAGE_LIMIT),
+                    source=(qs.get("source") or ["all"])[0],
+                    keyword=(qs.get("keyword") or [""])[0]))
+            elif path == "/api/gallery/update/status":
+                self._send_json(self.rt.update_status())
+            elif path == "/api/gallery/update/log":
+                self._send_json({"lines": self.rt.update_log_tail(
+                    _int_query(qs, "lines", default=80,
+                               minimum=1, maximum=MAX_LOG_LINES))})
+            elif path == "/api/system":
+                self._send_json(core.system_info(self.rt.config().get("screen")))
+            else:
+                self._error(404, "not found")
+        except _BadQuery as e:
+            self._error(400, str(e))
 
     def _state_response(self, qs):
         """状态快照；带 `since` 时改为长轮询。
