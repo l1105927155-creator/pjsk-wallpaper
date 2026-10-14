@@ -4,6 +4,7 @@
 不含任何网络逻辑。图库更新见 gallery_update.py。
 """
 import ctypes
+import hashlib
 import json
 import os
 import random
@@ -230,6 +231,8 @@ def read_update_log(lines: int = 80) -> list:
 
 
 THUMB_DIR = CACHE_DIR / "thumbs"
+# 按缓存键分片加锁：同一图片同一尺寸串行生成，不同图片仍可并行。
+_THUMB_LOCKS = [threading.Lock() for _ in range(32)]
 
 
 def path_to_image_id(path) -> str:
@@ -266,21 +269,47 @@ def get_desktop_wallpaper():
     return None
 
 
+def _thumb_key(path: Path, width: int) -> str:
+    """缩略图缓存键：图片的解析路径、文件大小、修改时间与目标宽度。
+
+    路径参与摘要，因此不同来源目录（pjsk / custom）下的同名图片不会互相命中；
+    内容变化（大小或修改时间改变）后键随之改变，缓存自然失效。
+    """
+    st = path.stat()
+    ident = f"{path.resolve()}|{st.st_size}|{st.st_mtime_ns}|{width}"
+    return hashlib.sha1(ident.encode("utf-8")).hexdigest() + ".png"
+
+
 def thumbnail(path: Path, width: int = 400) -> Path:
-    """按宽度等比生成缩略图，缓存于 cache/thumbs；用于图库网格按需加载。"""
-    key = f"{path.stem}__{path.stat().st_mtime_ns}__{width}.png"
-    dest = THUMB_DIR / key
+    """按宽度等比生成缩略图，缓存于 cache/thumbs；用于图库网格按需加载。
+
+    - 同一图片同一尺寸的并发请求串行生成并原子落盘（唯一临时文件 + os.replace），
+      不会互相写坏，也不会残留临时文件；
+    - 生成失败时清理临时文件并抛出，不留下可被误用的半成品缓存。
+    """
+    dest = THUMB_DIR / _thumb_key(path, width)
     if dest.is_file():
         return dest
-    THUMB_DIR.mkdir(parents=True, exist_ok=True)
-    with Image.open(path) as im:
-        im = im.convert("RGB")
-        if im.width > width:
-            h = max(1, round(im.height * width / im.width))
-            im = im.resize((width, h), Image.LANCZOS)
-        tmp = dest.with_name(dest.name + ".tmp")
-        im.save(tmp, format="PNG")
-    os.replace(tmp, dest)
+    with _THUMB_LOCKS[hash(dest.name) % len(_THUMB_LOCKS)]:
+        if dest.is_file():          # 等锁期间可能已由其它请求生成
+            return dest
+        THUMB_DIR.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=str(THUMB_DIR), suffix=".tmp")
+        os.close(fd)
+        try:
+            with Image.open(path) as im:
+                im = im.convert("RGB")
+                if im.width > width:
+                    h = max(1, round(im.height * width / im.width))
+                    im = im.resize((width, h), Image.LANCZOS)
+                im.save(tmp_name, format="PNG")
+            os.replace(tmp_name, dest)
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
     return dest
 
 

@@ -5,6 +5,7 @@
 docs/baseline-behavior.md 的手工验收步骤。
 """
 import json
+import os
 import random
 import sys
 import tempfile
@@ -105,6 +106,115 @@ class ConfigSaveConcurrencyTest(unittest.TestCase):
             self.assertIn("n", data)
             self.assertEqual([p.name for p in cfg_path.parent.iterdir()],
                              ["config.json"], "不应残留临时文件")
+
+
+class ThumbnailCacheTest(unittest.TestCase):
+    """缩略图缓存：并发安全、跨来源同名不串味、内容更新失效、失败不污染缓存。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        td = Path(self._tmp.name)
+        self.pjsk = td / "pjsk"
+        self.custom = td / "custom"
+        self.thumbs = td / "thumbs"
+        self.pjsk.mkdir()
+        self.custom.mkdir()
+        self.addCleanup(self._tmp.cleanup)
+        self._p = mock.patch.object(core, "THUMB_DIR", self.thumbs)
+        self._p.start()
+        self.addCleanup(self._p.stop)
+
+    def _img(self, d: Path, name: str, size, color) -> Path:
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / name
+        Image.new("RGB", size, color).save(p)
+        return p
+
+    def _tmp_files(self):
+        if not self.thumbs.is_dir():
+            return []
+        return [p.name for p in self.thumbs.iterdir() if p.suffix == ".tmp"]
+
+    def test_concurrent_same_image_no_corruption(self):
+        src = self._img(self.pjsk, "card.png", (200, 100), (10, 20, 30))
+        errors, outs = [], []
+        barrier = threading.Barrier(16)
+
+        def worker():
+            try:
+                barrier.wait(10)
+                outs.append(core.thumbnail(src, 64))
+            except Exception as e:            # noqa: BLE001 —— 记录全部异常
+                errors.append(f"{type(e).__name__}: {e}")
+
+        ts = [threading.Thread(target=worker) for _ in range(16)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(20)
+
+        self.assertEqual(errors, [], f"并发取同一缩略图不应报错: {errors[:3]}")
+        self.assertEqual(len(outs), 16)
+        self.assertEqual({str(p) for p in outs}, {str(outs[0])})
+        with Image.open(outs[0]) as im:          # 内容完整、未被并发写坏
+            self.assertEqual(im.size, (64, 32))
+            self.assertEqual(im.getpixel((32, 16)), (10, 20, 30))
+        self.assertEqual(self._tmp_files(), [], "不应残留临时文件")
+
+    def test_same_name_different_source_not_shared(self):
+        a = self._img(self.pjsk, "card.png", (200, 100), (200, 0, 0))
+        b = self._img(self.custom, "card.png", (200, 100), (0, 0, 200))
+        same = 1_700_000_000_000_000_000
+        for p in (a, b):
+            os.utime(p, ns=(same, same))
+        self.assertEqual(a.stat().st_mtime_ns, b.stat().st_mtime_ns)
+
+        ta, tb = core.thumbnail(a, 64), core.thumbnail(b, 64)
+        self.assertNotEqual(ta, tb, "不同目录的同名图片不得共用缓存")
+        with Image.open(ta) as im:
+            self.assertEqual(im.getpixel((5, 5)), (200, 0, 0))
+        with Image.open(tb) as im:
+            self.assertEqual(im.getpixel((5, 5)), (0, 0, 200))
+
+    def test_cache_invalidated_after_content_update(self):
+        src = self._img(self.pjsk, "card.png", (200, 100), (10, 20, 30))
+        first = core.thumbnail(src, 64)
+        # 覆盖内容并推进修改时间
+        Image.new("RGB", (200, 100), (250, 250, 250)).save(src)
+        st = src.stat()
+        os.utime(src, ns=(st.st_mtime_ns + 10_000_000, st.st_mtime_ns + 10_000_000))
+        second = core.thumbnail(src, 64)
+        self.assertNotEqual(first, second)
+        with Image.open(second) as im:
+            self.assertEqual(im.getpixel((10, 10)), (250, 250, 250))
+
+    def test_cache_invalidated_when_only_size_changes(self):
+        """修改时间未变但内容长度变化时同样失效（缓存键包含文件大小）。"""
+        src = self._img(self.pjsk, "card.png", (200, 100), (10, 20, 30))
+        ns = src.stat().st_mtime_ns
+        first = core.thumbnail(src, 64)
+        Image.new("RGB", (400, 200), (9, 9, 9)).save(src)   # 尺寸/字节数不同
+        os.utime(src, ns=(ns, ns))                          # 修改时间保持不变
+        second = core.thumbnail(src, 64)
+        self.assertNotEqual(first, second)
+        with Image.open(second) as im:
+            self.assertEqual(im.getpixel((10, 10)), (9, 9, 9))
+
+    def test_failed_generation_leaves_no_cache_or_temp(self):
+        src = self.pjsk / "broken.png"
+        src.write_bytes(b"not an image at all")
+        with self.assertRaises(Exception):
+            core.thumbnail(src, 64)
+        self.assertEqual(list(self.thumbs.glob("*.png")), [])
+        self.assertEqual(self._tmp_files(), [])
+        # 修正后重试应成功，且不受上次失败影响
+        Image.new("RGB", (100, 50), (1, 2, 3)).save(src)
+        st = src.stat()
+        os.utime(src, ns=(st.st_mtime_ns + 5, st.st_mtime_ns + 5))
+        out = core.thumbnail(src, 64)
+        self.assertTrue(out.is_file())
+        with Image.open(out) as im:
+            self.assertEqual(im.getpixel((10, 10)), (1, 2, 3))
 
 
 class ScanLibraryTest(unittest.TestCase):
