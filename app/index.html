@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pjsk 壁纸（阶段3 最简控制台）</title>
+<style>
+ body{font-family:"Microsoft YaHei UI",system-ui,sans-serif;margin:16px;background:#12151c;color:#e7eaf3}
+ button{padding:6px 12px;margin:2px;cursor:pointer}
+ pre{background:#1b1f2a;padding:10px;border-radius:6px;overflow:auto;max-height:40vh}
+ fieldset{margin:10px 0;border:1px solid #2b3140;border-radius:6px}
+</style>
+</head>
+<body>
+<h1>pjsk 壁纸 · 控制台</h1>
+<p>阶段 3 最简页面：仅验证 API 连通与后台可长期运行。正式界面见阶段 4。</p>
+
+<fieldset><legend>状态</legend>
+  <div id="status">加载中…</div>
+  <button onclick="load()">刷新状态</button>
+</fieldset>
+
+<fieldset><legend>切换</legend>
+  <button onclick="post('/api/wallpaper/desktop/next')">桌面下一张</button>
+  <button onclick="post('/api/wallpaper/lock/next')">锁屏下一张</button>
+</fieldset>
+
+<fieldset><legend>图库</legend>
+  <button onclick="post('/api/gallery/update')">立即更新</button>
+  <button onclick="post('/api/system/open-folder',{which:'pjsk'})">打开 pjsk 目录</button>
+  <button onclick="post('/api/system/open-folder',{which:'custom'})">打开 custom 目录</button>
+</fieldset>
+
+<fieldset><legend>配置（JSON 片段）</legend>
+  <button onclick="patch({desktop:{enabled:true},lock:{enabled:true}})">启用两者</button>
+  <button onclick="patch({desktop:{enabled:false},lock:{enabled:false}})">停用两者</button>
+</fieldset>
+
+<fieldset><legend>原始返回</legend><pre id="out"></pre></fieldset>
+
+<script>
+const TOKEN = "__PJSK_TOKEN__";
+const H = {"X-Pjsk-Token": TOKEN, "Content-Type": "application/json"};
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, Object.assign({headers: H}, opts));
+  const t = await r.text();
+  let body; try { body = JSON.parse(t); } catch (e) { body = t; }
+  return {status: r.status, body};
+}
+function show(o) { document.getElementById("out").textContent = JSON.stringify(o, null, 2); }
+async function load() {
+  const r = await api("/api/state");
+  const s = r.body;
+  document.getElementById("status").textContent =
+    `图库 pjsk ${s.gallery.pjsk} / custom ${s.gallery.custom}；` +
+    `桌面 ${s.desktop.enabled ? "开" : "关"} ${s.desktop.interval}min；` +
+    `锁屏 ${s.lock.enabled ? "开" : "关"} ${s.lock.interval}min；` +
+    `更新 ${s.update.running ? "进行中" : (s.update.message || "空闲")}`;
+  show(s);
+}
+async function post(path, data) {
+  const r = await api(path, {method: "POST", body: JSON.stringify(data || {})});
+  show(r); await load();
+}
+async function patch(data) {
+  const r = await api("/api/config", {method: "PATCH", body: JSON.stringify(data)});
+  show(r); await load();
+}
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>
