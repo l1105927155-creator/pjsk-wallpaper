@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Web UI 静态一致性检查：JS 引用的元素 id 必须存在、无外部 CDN 依赖、
 响应式断点与令牌占位齐全、选项卡视图齐全。"""
+import collections
 import re
 import sys
 import unittest
@@ -17,6 +18,42 @@ class WebUiTest(unittest.TestCase):
         cls.js = (APP / "app.js").read_text("utf-8")
         cls.css = (APP / "styles.css").read_text("utf-8")
         cls.ids = set(re.findall(r'\bid="([^"]+)"', cls.html))
+        # id -> 标签名（用于检查事件是否绑到了显示元素上）
+        cls.id_tags = {m.group(2): m.group(1)
+                       for m in re.finditer(r'<(\w+)[^>]*?\bid="([^"]+)"', cls.html, re.S)}
+
+    def test_ids_are_unique(self):
+        """id 重复是致命问题：getElementById 只返回第一个，
+        会把事件绑到错误的元素上（曾导致「下一张」按钮点了没反应）。"""
+        ids = re.findall(r'\bid="([^"]+)"', self.html)
+        dup = [k for k, v in collections.Counter(ids).items() if v > 1]
+        self.assertEqual(dup, [], f"index.html 存在重复 id: {dup}")
+
+    def test_click_bound_ids_are_not_display_elements(self):
+        """绑定了 click 的 id 不能落在纯显示元素上（<b>/<span>/<p>…），
+        否则显示位会抢走 id，真正的按钮永远收不到点击。"""
+        display_tags = {"b", "i", "em", "strong", "span", "small", "code",
+                        "p", "dt", "dd", "h1", "h2", "h3", "bdi", "label"}
+        bound = set(re.findall(
+            r'\$\("([A-Za-z0-9_\-]+)"\)\.addEventListener\("click"', self.js))
+        self.assertTrue(bound, "未解析到任何 click 绑定")
+        for bid in sorted(bound):
+            self.assertIn(bid, self.id_tags, f"{bid} 在 HTML 中不存在")
+            self.assertNotIn(self.id_tags[bid], display_tags,
+                             f"{bid} 绑到了 <{self.id_tags[bid]}>（显示元素）上")
+
+    def test_next_buttons_are_real_buttons(self):
+        """回归：deskNext/lockNext 必须是 <button>，且与显示位 deskNextTime/lockNextTime 不同名。"""
+        for bid in ("deskNext", "lockNext"):
+            self.assertEqual(self.id_tags.get(bid), "button", f"{bid} 不是 <button>")
+            self.assertEqual(re.findall(rf'\bid="{bid}"', self.html).__len__(), 1)
+            self.assertIn(f'$("{bid}").addEventListener("click"', self.js)
+
+    def test_meta_display_ids_do_not_clash_with_buttons(self):
+        """「下一次切换」显示位不得与「下一张」按钮重名。"""
+        for prefix in ("desk", "lock"):
+            self.assertIn(f'id="{prefix}NextTime"', self.html)
+            self.assertIn(f'$(prefix + "NextTime")', self.js)
 
     def test_all_js_element_ids_exist(self):
         used = set(re.findall(r'\$\("([A-Za-z0-9_\-]+)"\)', self.js))

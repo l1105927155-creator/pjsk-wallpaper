@@ -137,11 +137,18 @@ pjsk-wallpaper\
   （窗口被最小化或长时间被遮挡时，浏览器会节流甚至冻结页面，属浏览器行为。）
 - **UI 实机自检**（需 Node + Chrome）：
   ```
+  # 1) 起一个无副作用的预览服务（不改桌面壁纸、不动你的 config.json）
+  python tools/preview_server.py 8799
+  # 2) 起一个可远程调试的 Chrome
   chrome --headless=new --remote-debugging-port=9222 --user-data-dir=%TEMP%\pjsk-cdp about:blank
-  node tools/ui_check.js http://127.0.0.1:8788/
+  # 3) 跑自检
+  node tools/ui_check.js http://127.0.0.1:8799/
   ```
-  会检查：预览图能否加载、点「下一张」后界面是否立即刷新、外部状态变化后页面能否自行追上、
+  会检查：页面是否有**重复 id**、按钮位置上命中的是不是**按钮本身**、
+  **用真实鼠标点击**「下一张」后界面是否立即刷新、外部状态变化后页面能否自行追上、
   页面冻结恢复后能否重新同步、以及有无未捕获的 JS 异常。
+  注意：必须用真实鼠标事件；用 JS 的 `element.click()` 会绕过命中测试，
+  掩盖「事件绑错元素 / 被遮挡」这类问题。
 
 ## 卸载
 

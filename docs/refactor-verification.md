@@ -79,30 +79,40 @@
    对应测试：`tests/test_runtime.py::ConfigImportExportTest`、`tests/test_server.py`、
    `tests/test_web_ui.py::test_config_transfer_controls`。
 
-8. **「点下一张后界面不刷新」的排查与加固**（用户实机反馈）：
+8. **「点下一张没有任何反应」的真正根因与修复**（用户实机反馈，两次迭代）：
 
-   排查结论（用真实数据逐层验证）：
-   - 后端正常：直接调用实例接口返回 `ok=true`，`state.desktop.current`/`last` 均更新；
-   - 系统层面正常：切换后 `HKCU\Control Panel\Desktop\Wallpaper` 更新，
-     Explorer 重新生成的 `TranscodedWallpaper` 与刚选中的图片**像素级完全一致（平均差 0.00）**，
-     即桌面壁纸确实已切换；
-   - 图库正常：144 张图片全部完整解码、尺寸 2560×1440、与源文件 sha256 一致；
-   - 全新页面前端正常：用 CDP 驱动真实 Chrome 点击「下一张」，src/徽标/时间均正确刷新、无 JS 异常；
-   - 服务端并发正常：6 路图片并发下 `GET /api/state` 稳定 5–30 ms。
-   - **定位到用户页面的硬证据**：其截图中倒计时比真实时间慢约 95 秒，
-     说明该页面 JS 定时器已停止 —— 窗口被最小化/长期遮挡时浏览器会节流甚至冻结页面，
-     而旧实现「页面不可见时直接跳过轮询」且不监听恢复可见事件，导致界面永久停在旧状态。
+   **根因（已确认并复现）**：`app/index.html` 里 **id 重复**——
 
-   加固措施（本轮）：
-   - `POST /api/wallpaper/{desktop,lock}/next` 在**同一次响应**中返回最新 `state`，
-     界面据此直接渲染，不再依赖后续轮询；繁忙/失败响应同样携带 `state`；
-   - 轮询不再因 `document.hidden` 整体跳过；新增 `visibilitychange` / `focus` 立即同步；
-   - `api()` 增加 AbortController 超时（默认 15 s，切换 30 s），避免请求卡住导致界面静止；
-   - 预览按「逻辑 id」判定并附 `&v=` 变体参数强制刷新，不会停留在上一张的位图上；
-   - 看门狗：超过 3 个轮询周期未同步成功时顶部显示「状态未同步，请点刷新」，把静默失效变显性；
-   - 顺带修复：`core.thumbnail` 缓存键加入来源目录，避免 `pjsk/x.png` 与 `custom/x.png` 同名互相覆盖。
+   | 位置 | 元素 | 说明 |
+   | --- | --- | --- |
+   | 「下一次切换」显示位 | `<b id="deskNext">` | 在文档中**靠前** |
+   | 「下一张」按钮 | `<button id="deskNext">` | 真正的按钮，靠后 |
 
-   回归保障：
-   - `tests/test_server.py` 新增「next 响应必须带 state（含 busy 分支）」；
-   - `tests/test_web_ui.py::test_stale_page_hardening` 断言超时/可见性/看门狗/强制刷新等加固点存在；
-   - 新增 `tools/ui_check.js`（CDP 驱动真实 Chrome 的 UI 实机自检，9 项，可复现上述全部场景）。
+   `document.getElementById("deskNext")` 只返回**第一个**（那个 `<b>`），于是
+   `addEventListener("click", …)` 被绑到了 15px 高的文本元素上；
+   用户点击真正的按钮时**没有任何事件处理器**，所以毫无反应（无请求、无提示），
+   而服务端定时切换照常工作 —— 与用户描述完全一致。`lockNext` 同病。
+
+   **修复**：显示位改名 `deskNextTime` / `lockNextTime`，`renderWall` 改用新 id；
+   按钮仍为 `deskNext` / `lockNext`。
+
+   **测试盲区（已补）**：旧用例只断言「JS 引用的 id 存在」，未校验唯一性；
+   而当时的浏览器自检用 `element.click()`，**绕过了命中测试**，正好点中被错误绑定的
+   `<b>`，于是“测试通过”。现在：
+   - `tests/test_web_ui.py` 新增 `test_ids_are_unique`（页面级重复 id 检查）、
+     `test_click_bound_ids_are_not_display_elements`（click 不得绑在 `<b>/<span>` 等显示元素上）、
+     `test_next_buttons_are_real_buttons`（按钮必须是 `<button>` 且 id 唯一）；
+   - `tools/ui_check.js` 改为**真实鼠标事件**（`Input.dispatchMouseEvent`）+
+     `document.elementFromPoint` 命中校验 + 全页重复 id 扫描。
+     在未修复的实例上运行会明确失败（可复现原 bug），在修复版上 14/14 通过。
+
+   **同时保留的加固**（属另一类风险，非本次根因）：`next` 响应携带 `state` 直接渲染、
+   可见性恢复立即同步、请求超时、预览 `&v=` 强制刷新、看门狗提示「状态未同步」。
+
+   **顺带修复**：`core.thumbnail` 缓存键加入来源目录，避免 `pjsk/x.png` 与 `custom/x.png`
+   同名互相覆盖。
+
+   > 复盘：上一轮把症状归因为「窗口被遮挡导致页面节流/冻结」是**错误结论** ——
+   > 依据是页面倒计时落后于真实时间，但那可以由「页面长时间未被操作」自然解释，
+   > 且真实按钮的点击从未发出请求。教训：验证 UI 必须用真实输入事件，
+   > 且 HTML 结构层面的不变量（id 唯一）要有断言。

@@ -213,7 +213,9 @@
       badge.classList.add("hidden");
     }
     $(prefix + "Last").textContent = fmtTime(w.last);
-    $(prefix + "Next").textContent = w.enabled
+    // 注意：显示位 id 是 <prefix>NextTime，不能与「下一张」按钮 <prefix>Next 重名，
+    // 否则 getElementById 会先命中显示位、把事件绑到错误元素上。
+    $(prefix + "NextTime").textContent = w.enabled
       ? (w.next ? fmtTime(w.next) : "即将执行") : "—（未启用）";
     $(prefix + "IntervalTxt").textContent = w.interval + " 分钟";
     setInput($(prefix + "Interval"), w.interval);
