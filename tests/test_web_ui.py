@@ -118,23 +118,6 @@ class WebUiTest(unittest.TestCase):
                    "/api/config/export", "/api/config/import"):
             self.assertIn(ep, self.js, f"前端未使用接口 {ep}")
 
-    def test_stale_page_hardening(self):
-        """抗「页面停滞」的加固：超时、可见性恢复同步、看门狗、预览强制刷新。"""
-        self.assertIn("AbortController", self.js)              # 请求超时
-        self.assertIn("visibilitychange", self.js)             # 恢复可见立即同步
-        self.assertIn('addEventListener("focus"', self.js)
-        self.assertIn("状态未同步", self.js)                    # 看门狗提示
-        self.assertIn("painted", self.js)                      # 预览按逻辑 id 强制刷新
-        self.assertNotIn("if (document.hidden) { return; }   // 页面不可见时暂停轮询",
-                         self.js)
-        # 轮询不应再因页面隐藏而整段跳过
-        self.assertNotIn("if (document.hidden) { return; }\n      loadState();", self.js)
-
-    def test_next_uses_state_from_same_response(self):
-        """点下一张必须用同一次响应里的 state 渲染，而不是依赖后续轮询。"""
-        self.assertIn("b.state", self.js)
-        self.assertIn("function applyState", self.js)
-
     def test_no_absolute_paths_in_frontend(self):
         """前端不得拼接系统绝对路径。"""
         self.assertNotRegex(self.js, r"[A-Za-z]:\\\\")

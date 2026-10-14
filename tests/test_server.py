@@ -123,32 +123,10 @@ class ServerTest(unittest.TestCase):
     def test_next_buttons(self):
         status, body = self.req("POST", "/api/wallpaper/desktop/next")
         self.assertEqual(status, 200)
-        res = json.loads(body)
-        self.assertTrue(res["ok"])
-        # 同一次响应必须带回最新 state，前端据此直接渲染（不依赖后续轮询）
-        self.assertIn("state", res)
-        self.assertEqual(res["state"]["desktop"]["current"]["name"], res["name"])
-        self.assertEqual(res["state"]["desktop"]["last"],
-                         res["state"]["desktop"]["last"])   # 已写入计时
-        self.assertIsNotNone(res["state"]["desktop"]["last"])
-
+        self.assertTrue(json.loads(body)["ok"])
         status, body = self.req("POST", "/api/wallpaper/lock/next")
         self.assertEqual(status, 200)
-        res = json.loads(body)
-        self.assertTrue(res["ok"])
-        self.assertIn("state", res)
-        self.assertEqual(res["state"]["lock"]["current"]["name"], res["name"])
-
-    def test_next_returns_state_even_when_busy(self):
-        """繁忙响应也要带 state，界面才能显示真实进度而不是停在旧状态。"""
-        self.rt._desk_busy = True
-        try:
-            status, body = self.req("POST", "/api/wallpaper/desktop/next")
-            res = json.loads(body)
-            self.assertTrue(res["busy"])
-            self.assertIn("state", res)
-        finally:
-            self.rt._desk_busy = False
+        self.assertTrue(json.loads(body)["ok"])
 
     def test_image_requires_token(self):
         status, _ = self.req("GET", "/api/images/pjsk/card_1.png", token=False)

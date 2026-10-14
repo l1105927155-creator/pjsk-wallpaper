@@ -121,7 +121,6 @@ async function main() {
   console.log('    ' + JSON.stringify(a));
   check('页面已连上后端', a.pill === '运行中', 'pill=' + a.pill);
   check('预览图加载成功', a.loaded === true);
-  check('预览 URL 带变体参数（避免停留在旧位图）', /[?&]v=/.test(a.src || ''));
 
   console.log('\n[2] 用「真实鼠标点击」按下「下一张」');
   // 关键：必须用真实鼠标事件，不能用 JS 的 element.click()——
@@ -172,7 +171,7 @@ async function main() {
         'next=' + b.next);
   check('新预览图已加载', b.loaded === true);
 
-  console.log('\n[3] 外部改状态后页面应自行追上（轮询/看门狗）');
+  console.log('\n[3] 外部改状态后页面应自行追上（3 秒轮询）');
   const before = await probe();
   await evaluate(`(async function(){
     await fetch('/api/wallpaper/desktop/next', { method:'POST',
@@ -184,16 +183,7 @@ async function main() {
   const c = await probe();
   check('页面自动同步到最新状态', c.badge !== before.badge, `${before.badge} -> ${c.badge}`);
 
-  console.log('\n[4] 页面冻结→恢复后应重新同步');
-  await send('Page.setWebLifecycleState', { state: 'frozen' });
-  await sleep(800);
-  await send('Page.setWebLifecycleState', { state: 'active' });
-  await evaluate("window.dispatchEvent(new Event('focus')), 1");
-  await sleep(1200);
-  const d = await probe();
-  check('恢复后状态正常', d.pill === '运行中', 'pill=' + d.pill);
-
-  console.log('\n[5] 页面 JS 异常');
+  console.log('\n[4] 页面 JS 异常');
   check('无未捕获异常', errors.length === 0, errors.join(' | '));
 
   ws.close();

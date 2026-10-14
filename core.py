@@ -245,13 +245,8 @@ def get_desktop_wallpaper():
 
 
 def thumbnail(path: Path, width: int = 400) -> Path:
-    """按宽度等比生成缩略图，缓存于 cache/thumbs；用于图库网格按需加载。
-
-    缓存键包含来源目录：`pjsk/card_1.png` 与 `custom/card_1.png` 的文件名可能相同，
-    仅用 stem 会让两者互相覆盖，导致预览串图。
-    """
-    source = "custom" if Path(path).parent.resolve() == CUSTOM_DIR.resolve() else "other"
-    key = f"{source}__{path.stem}__{path.stat().st_mtime_ns}__{width}.png"
+    """按宽度等比生成缩略图，缓存于 cache/thumbs；用于图库网格按需加载。"""
+    key = f"{path.stem}__{path.stat().st_mtime_ns}__{width}.png"
     dest = THUMB_DIR / key
     if dest.is_file():
         return dest

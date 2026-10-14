@@ -221,13 +221,9 @@ class _Handler(BaseHTTPRequestHandler):
                              "state": self.rt.state() if ok else None},
                             200 if ok else 400)
         elif path == "/api/wallpaper/desktop/next":
-            res = self.rt.switch("desktop", manual=True)
-            res["state"] = self.rt.state()      # 同一次响应带回最新状态，
-            self._send_json(res)                # 前端无需再发一次 GET 即可刷新界面
+            self._send_json(self.rt.switch("desktop", manual=True))
         elif path == "/api/wallpaper/lock/next":
-            res = self.rt.switch("lock", manual=True)
-            res["state"] = self.rt.state()
-            self._send_json(res)
+            self._send_json(self.rt.switch("lock", manual=True))
         elif path == "/api/gallery/update":
             res = self.rt.start_update(manual=True)
             self._send_json(res, 200 if res["ok"] else 409)

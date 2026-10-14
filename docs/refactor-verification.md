@@ -79,9 +79,9 @@
    对应测试：`tests/test_runtime.py::ConfigImportExportTest`、`tests/test_server.py`、
    `tests/test_web_ui.py::test_config_transfer_controls`。
 
-8. **「点下一张没有任何反应」的真正根因与修复**（用户实机反馈，两次迭代）：
+8. **「点下一张没有任何反应」的根因与修复**（用户实机反馈）：
 
-   **根因（已确认并复现）**：`app/index.html` 里 **id 重复**——
+   **根因（已用真实鼠标点击复现）**：`app/index.html` 里 **id 重复**——
 
    | 位置 | 元素 | 说明 |
    | --- | --- | --- |
@@ -90,29 +90,24 @@
 
    `document.getElementById("deskNext")` 只返回**第一个**（那个 `<b>`），于是
    `addEventListener("click", …)` 被绑到了 15px 高的文本元素上；
-   用户点击真正的按钮时**没有任何事件处理器**，所以毫无反应（无请求、无提示），
+   点击真正的按钮时**没有任何事件处理器**（不发请求、无提示、无变化），
    而服务端定时切换照常工作 —— 与用户描述完全一致。`lockNext` 同病。
 
-   **修复**：显示位改名 `deskNextTime` / `lockNextTime`，`renderWall` 改用新 id；
-   按钮仍为 `deskNext` / `lockNext`。
+   **修复（最小改动）**：只把显示位改名 `deskNextTime` / `lockNextTime`，
+   `renderWall` 改用新 id；按钮仍为 `deskNext` / `lockNext`。
 
-   **测试盲区（已补）**：旧用例只断言「JS 引用的 id 存在」，未校验唯一性；
-   而当时的浏览器自检用 `element.click()`，**绕过了命中测试**，正好点中被错误绑定的
-   `<b>`，于是“测试通过”。现在：
+   **测试盲区（已补）**：
    - `tests/test_web_ui.py` 新增 `test_ids_are_unique`（页面级重复 id 检查）、
      `test_click_bound_ids_are_not_display_elements`（click 不得绑在 `<b>/<span>` 等显示元素上）、
      `test_next_buttons_are_real_buttons`（按钮必须是 `<button>` 且 id 唯一）；
-   - `tools/ui_check.js` 改为**真实鼠标事件**（`Input.dispatchMouseEvent`）+
-     `document.elementFromPoint` 命中校验 + 全页重复 id 扫描。
-     在未修复的实例上运行会明确失败（可复现原 bug），在修复版上 14/14 通过。
+   - `tools/ui_check.js`：用**真实鼠标事件**（`Input.dispatchMouseEvent`）+
+     `document.elementFromPoint` 命中校验 + 全页重复 id 扫描。原实现用 JS 的
+     `element.click()`，**绕过命中测试**，正好点中被错误绑定的 `<b>`，因此假通过 ——
+     这是本轮漏掉根因的直接原因。未修复实例上运行会明确失败，修复版通过。
 
-   **同时保留的加固**（属另一类风险，非本次根因）：`next` 响应携带 `state` 直接渲染、
-   可见性恢复立即同步、请求超时、预览 `&v=` 强制刷新、看门狗提示「状态未同步」。
+   > 复盘：中途曾把症状归因为「窗口被遮挡导致页面节流/冻结」并据此做了一批改动，
+   > 后经用户指正与复现确认该结论**错误**（真实按钮的点击从未发出请求，
+   > 倒计时落后可由页面长时间未被操作自然解释）。相关改动已整体回退，
+   > 保持最小改动。教训：验证 UI 必须用真实输入事件；HTML 结构层面的不变量
+   > （id 唯一）要有断言；诊断不确定时不要顺带做无关修改。
 
-   **顺带修复**：`core.thumbnail` 缓存键加入来源目录，避免 `pjsk/x.png` 与 `custom/x.png`
-   同名互相覆盖。
-
-   > 复盘：上一轮把症状归因为「窗口被遮挡导致页面节流/冻结」是**错误结论** ——
-   > 依据是页面倒计时落后于真实时间，但那可以由「页面长时间未被操作」自然解释，
-   > 且真实按钮的点击从未发出请求。教训：验证 UI 必须用真实输入事件，
-   > 且 HTML 结构层面的不变量（id 唯一）要有断言。
