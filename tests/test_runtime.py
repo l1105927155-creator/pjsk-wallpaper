@@ -177,6 +177,33 @@ class ConfigConsistencyTest(RuntimeBase):
                          ["desktop"]["interval"], 5)
 
 
+class StartupWallpaperTest(RuntimeBase):
+    """启动时当前系统壁纸读不到，不得让运行时构造失败。
+
+    回归背景：`core.get_desktop_wallpaper()` 在原壁纸文件已被删除（或系统为纯色
+    壁纸）时如实返回 None，而 `Runtime.__init__` 直接把 None 交给
+    `core.path_to_image_id()`，`Path(None)` 抛 TypeError。启动器用 pythonw 运行，
+    异常无控制台输出，表现为「双击快捷方式没有任何反应」。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(core, "APP_DIR", self.td).start()
+        mock.patch.object(core, "get_desktop_wallpaper", lambda: None).start()
+
+    def test_none_wallpaper_does_not_break_startup(self):
+        r = rt.Runtime(tick_seconds=9999)
+        self.assertIsNone(r._desk_current)
+
+    def test_existing_wallpaper_still_maps_to_id(self):
+        f = self.pjsk / "card_000.png"
+        f.write_bytes(b"x")
+        with mock.patch.object(core, "get_desktop_wallpaper", lambda: f):
+            r = rt.Runtime(tick_seconds=9999)
+        self.assertEqual(r._desk_current, "pjsk/card_000.png")
+
+
 class SwitchTest(RuntimeBase):
     def setUp(self):
         super().setUp()

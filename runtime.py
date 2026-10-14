@@ -90,8 +90,11 @@ class Runtime:
         # 当前壁纸（受控 ID），用于概览预览；存于 runtime/state.json 以跨进程重启保留
         self._last_state_path = core.APP_DIR / "runtime" / "state.json"
         saved = self._load_last_state()
-        self._desk_current = saved.get("desktop") or core.path_to_image_id(
-            core.get_desktop_wallpaper())
+        # 系统当前壁纸可能读不到（纯色壁纸，或原壁纸文件已被删除/换盘符），
+        # get_desktop_wallpaper() 此时如实返回 None：视为「当前壁纸未知」，不做推断。
+        wallpaper = core.get_desktop_wallpaper()
+        self._desk_current = saved.get("desktop") or (
+            core.path_to_image_id(wallpaper) if wallpaper else None)
         self._lock_current = saved.get("lock")
 
     def _load_last_state(self) -> dict:
