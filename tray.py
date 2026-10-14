@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """tray.py — 纯 ctypes 系统托盘（Shell_NotifyIcon），无第三方依赖
 
-只依赖 tkinter 的消息循环：通过 Tk 的 window protocol 机制接收不到托盘消息，
-所以用一个独立的隐藏消息窗口（纯 Win32）处理回调，再把动作派发给 tkinter。
+在独立线程里跑一个隐藏的 Win32 消息窗口接收托盘消息，再通过回调把动作
+（show / next_desk / next_lock / exit）派发给调用方。回调发生在托盘线程，
+调用方需自行保证线程安全（launcher.pyw 直接调用运行时，无需 UI 线程中转）。
 """
 import ctypes
 import threading

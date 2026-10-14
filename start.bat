@@ -2,7 +2,7 @@
 rem Launcher for pjsk-wallpaper.
 rem Prefer a portable pythonw in runtime\python, then pyw / py / pythonw on PATH.
 setlocal
-set "SCRIPT=%~dp0wallpaper.pyw"
+set "SCRIPT=%~dp0launcher.pyw"
 
 if exist "%~dp0runtime\python\pythonw.exe" (
     start "" "%~dp0runtime\python\pythonw.exe" "%SCRIPT%"

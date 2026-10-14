@@ -386,6 +386,7 @@ class WallpaperServer:
         self.httpd = None
         self.port = None
         self._port_start = port
+        self._serving = False
 
     def bind(self) -> int:
         last = None
@@ -406,9 +407,11 @@ class WallpaperServer:
                       f"端口: {last}")
 
     def serve_forever(self):
+        self._serving = True
         self.httpd.serve_forever(poll_interval=0.5)
 
     def start_background(self):
+        self._serving = True
         threading.Thread(target=self.serve_forever, name="http", daemon=True).start()
 
     def write_port_file(self):
@@ -426,10 +429,12 @@ class WallpaperServer:
     def shutdown(self):
         self.clear_port_file()
         if self.httpd:
-            try:
-                self.httpd.shutdown()
-            except Exception:
-                pass
+            # 未真正进入 serve_forever 时不能调用 shutdown()（会阻塞等待循环退出）
+            if self._serving:
+                try:
+                    self.httpd.shutdown()
+                except Exception:
+                    pass
             try:
                 self.httpd.server_close()
             except Exception:

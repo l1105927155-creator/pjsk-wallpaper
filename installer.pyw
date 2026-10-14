@@ -21,10 +21,14 @@ from tkinter import ttk
 SRC = Path(__file__).resolve().parent
 # 安装所需的最小文件集（不含 config/library/cache/logs 等运行产物）
 INSTALL_FILES = [
-    "wallpaper.pyw", "gallery_update.py", "core.py", "tray.py",
-    "set_lockscreen.ps1", "start.bat", "requirements.txt",
+    "launcher.pyw", "server.py", "runtime.py", "gallery_update.py",
+    "core.py", "tray.py", "set_lockscreen.ps1", "start.bat", "requirements.txt",
     "icon.png", "icon.ico", "README.md",
 ]
+# 需要整目录复制的静态资源
+INSTALL_DIRS = ["app"]
+# 旧版入口（Tkinter 主界面）在升级时移除，避免留下两套入口
+LEGACY_FILES = ["wallpaper.pyw"]
 DEFAULT_DIR = Path(os.environ.get("LOCALAPPDATA", str(SRC))) / "pjsk-wallpaper"
 DIR_NAME = "pjsk-wallpaper"
 
@@ -221,6 +225,19 @@ class Wizard(tk.Tk):
                 src = SRC / name
                 if src.exists():
                     shutil.copy2(src, dest / name)
+            for name in INSTALL_DIRS:
+                src = SRC / name
+                if src.is_dir():
+                    shutil.copytree(src, dest / name, dirs_exist_ok=True)
+            # 升级：移除旧版 Tkinter 入口，避免残留两套启动方式
+            for name in LEGACY_FILES:
+                old = dest / name
+                if old.exists():
+                    self._step(f"正在清理旧版本文件 {name}...")
+                    try:
+                        old.unlink()
+                    except OSError:
+                        pass
 
             self._step("正在检查运行环境...")
             r = subprocess.run([sys.executable, "-c", "import PIL"],
@@ -295,7 +312,7 @@ class Wizard(tk.Tk):
             script += (
                 f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}'); "
                 f"$s.TargetPath = '{self._pythonw()}'; "
-                f"$s.Arguments = '\"{dest / 'wallpaper.pyw'}\"'; "
+                f"$s.Arguments = '\"{dest / 'launcher.pyw'}\"'; "
                 f"$s.WorkingDirectory = '{dest}'; "
                 f"$s.IconLocation = '{icon},0'; "
                 f"$s.Save(); "
@@ -312,11 +329,11 @@ class Wizard(tk.Tk):
         import winreg
         key = r"Software\Microsoft\Windows\CurrentVersion\Run"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as k:
-            val = f'"{self._pythonw()}" "{dest / "wallpaper.pyw"}"'
+            val = f'"{self._pythonw()}" "{dest / "launcher.pyw"}"'
             winreg.SetValueEx(k, "pjsk-wallpaper", 0, winreg.REG_SZ, val)
 
     def _launch(self, dest: Path):
-        subprocess.Popen([self._pythonw(), str(dest / "wallpaper.pyw")],
+        subprocess.Popen([self._pythonw(), str(dest / "launcher.pyw")],
                          cwd=str(dest), creationflags=0x08000000)
 
 

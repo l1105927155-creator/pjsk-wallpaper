@@ -361,7 +361,7 @@ def set_lockscreen(path: Path, timeout: int = 30):
 def set_autostart(on: bool):
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
         if on:
-            val = f'"{sys.executable}" "{APP_DIR / "wallpaper.pyw"}"'
+            val = f'"{sys.executable}" "{APP_DIR / "launcher.pyw"}"'
             winreg.SetValueEx(k, "pjsk-wallpaper", 0, winreg.REG_SZ, val)
         else:
             try:
@@ -426,7 +426,7 @@ def create_shortcuts() -> list:
     exe = Path(sys.executable)
     pythonw = exe.with_name("pythonw.exe")
     target = str(pythonw if pythonw.exists() else exe)
-    script = APP_DIR / "wallpaper.pyw"
+    script = APP_DIR / "launcher.pyw"
     results = []
     for lnk in (Path(os.environ.get("USERPROFILE", ".")) / "Desktop" / "pjsk 壁纸.lnk",
                 Path(os.environ.get("APPDATA", ".")) / r"Microsoft\Windows\Start Menu\Programs"
