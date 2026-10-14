@@ -188,10 +188,14 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError:
             self._error(400, "Content-Length 非法")
             return
-        ctype = (self.headers.get("Content-Type") or "").lower()
+        # 保留原始大小写：multipart 的 boundary 值大小写敏感，
+        # 整串 header 转小写会破坏 boundary 匹配（浏览器生成的
+        # ----WebKitFormBoundary 含大写字母，直接导致“未收到文件”）。
+        ctype = self.headers.get("Content-Type") or ""
+        media_type = ctype.split(";", 1)[0].strip().lower()
 
         if u.path == "/api/gallery/custom":
-            if "multipart/form-data" not in ctype:
+            if media_type != "multipart/form-data":
                 self._error(400, "需要 multipart/form-data 上传")
                 return
             if length > MAX_UPLOAD_BODY:
@@ -326,7 +330,8 @@ class _Handler(BaseHTTPRequestHandler):
         boundary = None
         for part in ctype.split(";"):
             part = part.strip()
-            if part.startswith("boundary="):
+            # 参数名大小写不敏感，但 boundary 值必须原样保留
+            if part.lower().startswith("boundary="):
                 boundary = part[len("boundary="):].strip('"')
         if not boundary:
             self._error(400, "缺少 multipart boundary")

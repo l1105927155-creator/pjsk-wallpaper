@@ -235,7 +235,8 @@ class ServerTest(unittest.TestCase):
         buf = io.BytesIO()
         Image.new("RGB", (10, 10), (9, 9, 9)).save(buf, format="PNG")
         valid = buf.getvalue()
-        boundary = "----wbk"
+        # 浏览器生成的 boundary 含大小写混合字符，必须原样保留才能匹配
+        boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
         parts = []
         for name, data in (("pic.png", valid), ("evil.txt", b"not an image")):
             parts.append(
