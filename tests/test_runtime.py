@@ -95,6 +95,88 @@ class ConfigValidationTest(RuntimeBase):
         self.assertEqual(self.cfg_path.read_text("utf-8"), before)
 
 
+class ConfigConsistencyTest(RuntimeBase):
+    """配置的读改写与持久化必须一致：不丢更新、不报假成功、不写坏磁盘。"""
+
+    _PATCHES = [
+        {"desktop": {"interval": 11}},
+        {"lock": {"interval": 77}},
+        {"cap_pjsk": 123},
+        {"update": {"count": 7}},
+        {"update": {"min_rarity": 2}},
+        {"update": {"chara": "奏"}},
+        {"update": {"region": "cn"}},
+        {"use_custom": True},
+    ]
+
+    def _assert_patches_applied(self, cfg, label):
+        self.assertEqual(cfg["desktop"]["interval"], 11, label)
+        self.assertEqual(cfg["lock"]["interval"], 77, label)
+        self.assertEqual(cfg["cap_pjsk"], 123, label)
+        self.assertEqual(cfg["update"]["count"], 7, label)
+        self.assertEqual(cfg["update"]["min_rarity"], 2, label)
+        self.assertEqual(cfg["update"]["chara"], "奏", label)
+        self.assertEqual(cfg["update"]["region"], "cn", label)
+        self.assertTrue(cfg["use_custom"], label)
+
+    def test_concurrent_distinct_field_patches_do_not_lose_updates(self):
+        r = rt.Runtime(tick_seconds=9999)
+        results = []
+        barrier = threading.Barrier(len(self._PATCHES))
+
+        def worker(patch):
+            barrier.wait(10)
+            results.append(r.apply_config(patch))
+
+        ts = [threading.Thread(target=worker, args=(p,)) for p in self._PATCHES]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(10)
+
+        self.assertTrue(all(ok for ok, _e, _w in results), results)
+        self._assert_patches_applied(r.config(), "内存")
+        self._assert_patches_applied(
+            json.loads(self.cfg_path.read_text("utf-8")), "磁盘")
+
+    def test_concurrent_config_change_and_update_keep_last_run(self):
+        """图库更新写的 last_run 不得被并发的旧配置快照回写。"""
+        r = rt.Runtime(tick_seconds=9999)
+        barrier = threading.Barrier(2)
+
+        def patcher():
+            barrier.wait(10)
+            r.apply_config({"desktop": {"interval": 45}})
+
+        def updater():
+            barrier.wait(10)
+            with mock.patch.object(r, "_run_update", lambda: None):
+                r.start_update(manual=True)
+
+        ts = [threading.Thread(target=patcher), threading.Thread(target=updater)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(10)
+
+        for label, cfg in (("内存", r.config()),
+                           ("磁盘", json.loads(self.cfg_path.read_text("utf-8")))):
+            self.assertEqual(cfg["desktop"]["interval"], 45, label)
+            self.assertGreater(cfg["update"]["last_run"], 0, label)
+
+    def test_save_failure_is_reported_and_memory_stays_consistent(self):
+        r = rt.Runtime(tick_seconds=9999)
+        r.apply_config({"desktop": {"interval": 5}})
+        with mock.patch.object(core, "config_save", side_effect=OSError("磁盘已满")):
+            ok, errors, _w = r.apply_config({"desktop": {"interval": 45}})
+        self.assertFalse(ok, "落盘失败不得报告成功")
+        self.assertTrue(errors)
+        # 内存与磁盘都保持旧值，不出现「报成功却状态不一致」
+        self.assertEqual(r.config()["desktop"]["interval"], 5)
+        self.assertEqual(json.loads(self.cfg_path.read_text("utf-8"))
+                         ["desktop"]["interval"], 5)
+
+
 class SwitchTest(RuntimeBase):
     def setUp(self):
         super().setUp()

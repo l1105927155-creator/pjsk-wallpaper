@@ -9,6 +9,8 @@ import os
 import random
 import subprocess
 import sys
+import tempfile
+import threading
 import winreg
 from pathlib import Path
 
@@ -83,13 +85,33 @@ def config_load() -> dict:
     return merged
 
 
+_CONFIG_WRITE_LOCK = threading.Lock()
+
+
 def config_save(cfg: dict):
-    """原子写盘：先写同目录临时文件再 os.replace，避免中途失败留下截断的 JSON。"""
+    """原子写盘：先写同目录临时文件再 os.replace，避免中途失败留下截断的 JSON。
+
+    临时文件名每次唯一（mkstemp），并在进程内串行化整个写入：
+    - 多个写入者不会竞争同一个临时文件；
+    - Windows 上并发 os.replace 覆盖同一目标会因共享冲突失败，串行化可避免；
+    - 失败时清理临时文件并向上抛出，由调用方决定失败语义。
+    调用方仍需自行保证「读-改-写」的整体一致性（见 runtime.Runtime）。
+    """
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(cfg, ensure_ascii=False, indent=2)
-    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
-    tmp.write_text(text, "utf-8")
-    os.replace(tmp, CONFIG_PATH)
+    with _CONFIG_WRITE_LOCK:
+        fd, tmp_name = tempfile.mkstemp(dir=str(CONFIG_PATH.parent),
+                                        prefix=CONFIG_PATH.name + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+            os.replace(tmp_name, CONFIG_PATH)
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
 
 
 # ---------- 图片处理 ----------

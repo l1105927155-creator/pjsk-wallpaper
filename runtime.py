@@ -269,6 +269,10 @@ class Runtime:
         """校验并应用部分配置；返回 (ok, errors, warnings)。成功则原子落盘并生效。
 
         只允许已定义字段；类型/范围非法整体拒绝，不做部分写入。
+
+        并发一致性：复制、校验、合并、落盘、发布都在同一把锁内完成，两个并发的
+        PATCH 不会互相覆盖（丢失更新），也不会竞争同一临时文件；先落盘成功再发布
+        内存状态，落盘失败时内存保持原值并如实返回失败，不以「已保存」欺骗客户端。
         """
         errors, warnings = [], []
         if not isinstance(patch, dict):
@@ -278,8 +282,6 @@ class Runtime:
         for key in patch:
             if key not in allowed_top:
                 errors.append(f"{key} 不是可配置项")
-        with self._lock:
-            new = deepcopy(self._cfg)
 
         def _bool(path, value):
             if not isinstance(value, bool):
@@ -296,91 +298,102 @@ class Runtime:
                 return None
             return value
 
-        # desktop / lock
-        for target, allowed in (("desktop", ("enabled", "interval")),
-                                ("lock", ("enabled", "interval"))):
-            if target in patch:
-                sub = patch[target]
-                if not isinstance(sub, dict):
-                    errors.append(f"{target} 需要对象")
-                    continue
-                for key in sub:
-                    if key not in allowed:
-                        errors.append(f"{target}.{key} 不是可配置项")
-                        continue
-                    if key == "enabled":
-                        v = _bool(f"{target}.enabled", sub[key])
-                    else:
-                        v = _int(f"{target}.interval", sub[key], _INT_RANGES[(target, key)])
-                    if v is not None:
-                        new[target][key] = v
-
-        # 顶层布尔
-        for key in ("use_pjsk", "use_custom"):
-            if key in patch:
-                v = _bool(key, patch[key])
-                if v is not None:
-                    new[key] = v
-
-        if "cap_pjsk" in patch:
-            v = _int("cap_pjsk", patch["cap_pjsk"], _CAP_RANGE)
-            if v is not None:
-                new["cap_pjsk"] = v
-
-        if "screen" in patch:
-            v = patch["screen"]
-            if v is None:
-                new["screen"] = None
-            elif (isinstance(v, (list, tuple)) and len(v) == 2
-                  and all(isinstance(x, int) and not isinstance(x, bool) and x > 0 for x in v)):
-                new["screen"] = [int(v[0]), int(v[1])]
-            else:
-                errors.append("screen 需要 [宽,高] 正整数或 null")
-
-        # update
-        if "update" in patch:
-            if not isinstance(patch["update"], dict):
-                errors.append("update 需要对象")
-            else:
-                up_allowed = {"count", "min_rarity", "interval", "interval_enabled",
-                              "chara", "unit", "region", "trained"}
-                for key, value in patch["update"].items():
-                    if key not in up_allowed:
-                        errors.append(f"update.{key} 不是可配置项")
-                        continue
-                    if key in ("count", "min_rarity", "interval"):
-                        v = _int(f"update.{key}", value, _INT_RANGES[("update", key)])
-                        if v is not None:
-                            new["update"][key] = v
-                    elif key == "interval_enabled":
-                        v = _bool("update.interval_enabled", value)
-                        if v is not None:
-                            new["update"][key] = v
-                    elif key == "trained":
-                        v = _bool("update.trained", value)
-                        if v is not None:
-                            new["update"][key] = v
-                    elif key == "region":
-                        if not isinstance(value, str) or value not in _REGIONS:
-                            errors.append("update.region 非法")
-                        else:
-                            new["update"]["region"] = value
-                    else:  # chara / unit
-                        if not isinstance(value, str):
-                            errors.append(f"update.{key} 需要字符串")
-                        elif len(value) > 40:
-                            errors.append(f"update.{key} 过长")
-                        else:
-                            new["update"][key] = value.strip()
-
-        if errors:
-            return False, errors, []
-
-        # 图库来源都关闭：保留旧版语义（允许保存，但明确提示切换会无图可用）
-        if not new.get("use_pjsk") and not new.get("use_custom"):
-            warnings.append("pjsk 与自定义图库均已关闭：壁纸切换将因图库为空而无动作")
-
         with self._lock:
+            new = deepcopy(self._cfg)
+
+            # desktop / lock
+            for target, allowed in (("desktop", ("enabled", "interval")),
+                                    ("lock", ("enabled", "interval"))):
+                if target in patch:
+                    sub = patch[target]
+                    if not isinstance(sub, dict):
+                        errors.append(f"{target} 需要对象")
+                        continue
+                    for key in sub:
+                        if key not in allowed:
+                            errors.append(f"{target}.{key} 不是可配置项")
+                            continue
+                        if key == "enabled":
+                            v = _bool(f"{target}.enabled", sub[key])
+                        else:
+                            v = _int(f"{target}.interval", sub[key],
+                                     _INT_RANGES[(target, key)])
+                        if v is not None:
+                            new[target][key] = v
+
+            # 顶层布尔
+            for key in ("use_pjsk", "use_custom"):
+                if key in patch:
+                    v = _bool(key, patch[key])
+                    if v is not None:
+                        new[key] = v
+
+            if "cap_pjsk" in patch:
+                v = _int("cap_pjsk", patch["cap_pjsk"], _CAP_RANGE)
+                if v is not None:
+                    new["cap_pjsk"] = v
+
+            if "screen" in patch:
+                v = patch["screen"]
+                if v is None:
+                    new["screen"] = None
+                elif (isinstance(v, (list, tuple)) and len(v) == 2
+                      and all(isinstance(x, int) and not isinstance(x, bool) and x > 0
+                              for x in v)):
+                    new["screen"] = [int(v[0]), int(v[1])]
+                else:
+                    errors.append("screen 需要 [宽,高] 正整数或 null")
+
+            # update
+            if "update" in patch:
+                if not isinstance(patch["update"], dict):
+                    errors.append("update 需要对象")
+                else:
+                    up_allowed = {"count", "min_rarity", "interval", "interval_enabled",
+                                  "chara", "unit", "region", "trained"}
+                    for key, value in patch["update"].items():
+                        if key not in up_allowed:
+                            errors.append(f"update.{key} 不是可配置项")
+                            continue
+                        if key in ("count", "min_rarity", "interval"):
+                            v = _int(f"update.{key}", value,
+                                     _INT_RANGES[("update", key)])
+                            if v is not None:
+                                new["update"][key] = v
+                        elif key == "interval_enabled":
+                            v = _bool("update.interval_enabled", value)
+                            if v is not None:
+                                new["update"][key] = v
+                        elif key == "trained":
+                            v = _bool("update.trained", value)
+                            if v is not None:
+                                new["update"][key] = v
+                        elif key == "region":
+                            if not isinstance(value, str) or value not in _REGIONS:
+                                errors.append("update.region 非法")
+                            else:
+                                new["update"]["region"] = value
+                        else:  # chara / unit
+                            if not isinstance(value, str):
+                                errors.append(f"update.{key} 需要字符串")
+                            elif len(value) > 40:
+                                errors.append(f"update.{key} 过长")
+                            else:
+                                new["update"][key] = value.strip()
+
+            if errors:
+                return False, errors, []
+
+            # 图库来源都关闭：保留旧版语义（允许保存，但明确提示切换会无图可用）
+            if not new.get("use_pjsk") and not new.get("use_custom"):
+                warnings.append("pjsk 与自定义图库均已关闭：壁纸切换将因图库为空而无动作")
+
+            # 先落盘，成功后才发布内存状态；失败则整体保持原状并报告失败
+            try:
+                core.config_save(new)
+            except OSError as e:
+                return False, [f"保存配置失败：{e}"], []
+
             # interval_enabled 由关到开：重设锚点，避免立即触发
             was_on = bool(self._cfg["update"].get("interval_enabled"))
             now_on = bool(new["update"].get("interval_enabled"))
@@ -388,7 +401,6 @@ class Runtime:
                 self._up_anchor = time.time()
             self._cfg = new
             self._bump()
-        core.config_save(self._cfg)
         return True, [], warnings
 
     def config(self) -> dict:
@@ -610,9 +622,15 @@ class Runtime:
                                 ok=None, message="更新中…")
             self._update["last_run"] = now
             self._up_anchor = now
+            # 与 apply_config 共用同一把锁完成「改内存 + 落盘」，
+            # 避免并发的配置写入用旧快照回写掉这里的 last_run。
             self._cfg["update"]["last_run"] = now
+            try:
+                core.config_save(self._cfg)
+            except OSError:
+                # 落盘失败不阻断更新本身：last_run 属运行时状态，进程内仍然生效
+                pass
             self._bump()
-        core.config_save(self._cfg)
         threading.Thread(target=self._run_update, name="gallery-update",
                          daemon=True).start()
         return {"ok": True, "busy": False, "message": "已开始更新"}

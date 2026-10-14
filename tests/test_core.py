@@ -8,6 +8,7 @@ import json
 import random
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -74,6 +75,36 @@ class ConfigTest(unittest.TestCase):
                 again = core.config_load()
             self.assertEqual(again["desktop"]["interval"], 7)
             self.assertEqual(again["update"]["chara"], "奏")
+
+
+class ConfigSaveConcurrencyTest(unittest.TestCase):
+    """原子写盘在多写入者并发时必须成立：不得竞争同一个临时文件。"""
+
+    def test_concurrent_writers_share_no_temp_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = Path(td) / "config.json"
+            errors = []
+
+            def writer(i):
+                try:
+                    core.config_save({"n": i})
+                except Exception as e:            # noqa: BLE001 —— 记录全部异常
+                    errors.append(f"{type(e).__name__}: {e}")
+
+            with mock.patch.object(core, "CONFIG_PATH", cfg_path):
+                for _ in range(5):
+                    ts = [threading.Thread(target=writer, args=(i,))
+                          for i in range(16)]
+                    for t in ts:
+                        t.start()
+                    for t in ts:
+                        t.join(10)
+
+            self.assertEqual(errors, [], f"并发写入不应报错，实际: {errors[:3]}")
+            data = json.loads(cfg_path.read_text("utf-8"))   # 内容完整可解析
+            self.assertIn("n", data)
+            self.assertEqual([p.name for p in cfg_path.parent.iterdir()],
+                             ["config.json"], "不应残留临时文件")
 
 
 class ScanLibraryTest(unittest.TestCase):
