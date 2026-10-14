@@ -25,6 +25,7 @@ import core
 
 TICK_SECONDS = 20          # 与旧版 tick 周期一致
 LOG_TAIL_LINES = 200
+EXPORT_VERSION = 1         # 设置文件格式版本
 
 # 可写字段的合法范围（与旧版 Spinbox 范围一致）
 _INT_RANGES = {
@@ -36,6 +37,15 @@ _INT_RANGES = {
 }
 _CAP_RANGE = (1, 9999)
 _REGIONS = {"jp", "cn", "en", "kr", "tw"}
+
+# ---- 设置导入：可迁移项与本机项 ----
+# 可迁移（会真正应用）的顶层字段
+_IMPORTABLE_TOP = {"desktop", "lock", "use_pjsk", "use_custom", "cap_pjsk", "update"}
+# 本机相关：识别但忽略（不随配置迁移）
+_IGNORED_TOP = {"screen": "本机屏幕分辨率", "autostart": "本机开机自启"}
+_IMPORTABLE_UPDATE = {"count", "min_rarity", "interval", "interval_enabled",
+                      "chara", "unit", "region", "trained"}
+_IGNORED_UPDATE = {"last_run": "上次更新时间（运行时状态）"}
 
 
 def _no_window() -> int:
@@ -345,6 +355,102 @@ class Runtime:
     def config(self) -> dict:
         with self._lock:
             return deepcopy(self._cfg)
+
+    # ------------------------------------------------------------------ 设置导入 / 导出
+
+    def export_config(self) -> dict:
+        """导出设置快照。
+
+        - 只包含**可在机器之间迁移**的设置；`screen`、`autostart`、
+          `update.last_run` 属本机/运行时状态，放在 `machine`/不含在 `config` 内。
+        - 不含任何图片，也不含绝对路径。
+        """
+        with self._lock:
+            cfg = deepcopy(self._cfg)
+        screen = cfg.pop("screen", None)
+        cfg.pop("autostart", None)
+        cfg.get("update", {}).pop("last_run", None)
+        return {
+            "app": core.APP_NAME,
+            "kind": "settings",
+            "version": EXPORT_VERSION,
+            "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "machine": {"screen": screen},
+            "config": cfg,
+        }
+
+    def import_config(self, payload):
+        """导入设置文件。支持两种输入：
+
+        1. 本程序导出的信封：`{"app": "pjsk-wallpaper", "config": {...}}`
+        2. **原始 config.json 内容**（直接导入用户手里的配置文件）
+
+        采用「覆盖文件中出现的项」语义（文件中没有的项保持不变）。
+        严格校验：未知项、类型/范围错误整体拒绝，不做部分写入。
+        返回 (ok, errors, warnings, applied)。
+        """
+        errors, warnings, applied = [], [], []
+        if not isinstance(payload, dict):
+            return False, ["文件内容必须是 JSON 对象"], [], []
+
+        if payload.get("app") == core.APP_NAME and isinstance(payload.get("config"), dict):
+            body = payload["config"]
+            ver = payload.get("version")
+            if isinstance(ver, int) and ver > EXPORT_VERSION:
+                warnings.append(f"文件版本 {ver} 高于当前支持的 {EXPORT_VERSION}，"
+                                f"仅导入可识别项")
+        else:
+            body = payload
+
+        patch = {}
+        for key, value in body.items():
+            if key in _IGNORED_TOP:
+                warnings.append(f"已忽略 {key}（{_IGNORED_TOP[key]}，不随配置迁移）")
+                continue
+            if key not in _IMPORTABLE_TOP:
+                errors.append(f"未知配置项: {key}")
+                continue
+
+            if key in ("desktop", "lock"):
+                if not isinstance(value, dict):
+                    errors.append(f"{key} 需要对象")
+                    continue
+                sub = {}
+                for k, v in value.items():
+                    if k in ("enabled", "interval"):
+                        sub[k] = v
+                    else:
+                        errors.append(f"未知配置项: {key}.{k}")
+                if sub:
+                    patch[key] = sub
+                    applied.append(key)
+            elif key == "update":
+                if not isinstance(value, dict):
+                    errors.append("update 需要对象")
+                    continue
+                sub = {}
+                for k, v in value.items():
+                    if k in _IGNORED_UPDATE:
+                        warnings.append(f"已忽略 update.{k}（{_IGNORED_UPDATE[k]}）")
+                    elif k in _IMPORTABLE_UPDATE:
+                        sub[k] = v
+                    else:
+                        errors.append(f"未知配置项: update.{k}")
+                if sub:
+                    patch["update"] = sub
+                    applied.append("update")
+            else:
+                patch[key] = value
+                applied.append(key)
+
+        if errors:
+            return False, errors, warnings, []
+
+        ok, verrors, vwarns = self.apply_config(patch)
+        if not ok:
+            return False, verrors, warnings, []
+        self._set_status(f"已导入设置：{len(applied)} 项")
+        return True, [], warnings + vwarns, applied
 
     # ------------------------------------------------------------------ 切换
 

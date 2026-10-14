@@ -174,6 +174,48 @@ class ServerTest(unittest.TestCase):
         self.assertIn(self.token.encode(), body)
         self.assertNotIn(b"__PJSK_TOKEN__", body)
 
+    def test_config_export_requires_token(self):
+        status, _ = self.req("GET", "/api/config/export", token=False)
+        self.assertEqual(status, 403)
+        status, body = self.req("GET", "/api/config/export")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["app"], "pjsk-wallpaper")
+        self.assertIn("config", data)
+        self.assertNotIn("screen", data["config"])
+
+    def test_config_import_raw_config(self):
+        raw = {"desktop": {"enabled": True, "interval": 9},
+               "lock": {"enabled": True, "interval": 45},
+               "screen": [800, 600], "autostart": False,
+               "update": {"count": 4, "min_rarity": 3, "chara": "kanade",
+                          "unit": "", "region": "jp", "trained": True,
+                          "interval_enabled": False, "interval": 360,
+                          "last_run": 1.0}}
+        status, body = self.req("POST", "/api/config/import", body=raw)
+        self.assertEqual(status, 200, body)
+        data = json.loads(body)
+        self.assertTrue(data["ok"])
+        self.assertIn("desktop", data["applied"])
+        self.assertIn("update", data["applied"])
+        self.assertEqual(data["state"]["config"]["desktop"]["interval"], 9)
+
+    def test_config_import_invalid_rejected(self):
+        for bad in ({"nope": 1}, {"desktop": {"interval": 0}},
+                    {"desktop": {"interval": "x"}}, {"update": {"region": "zz"}}):
+            status, body = self.req("POST", "/api/config/import", body=bad)
+            self.assertEqual(status, 400, f"应拒绝 {bad}")
+            self.assertFalse(json.loads(body)["ok"])
+
+    def test_config_import_needs_token_and_same_origin(self):
+        status, _ = self.req("POST", "/api/config/import",
+                             body={"use_custom": True}, token=False)
+        self.assertEqual(status, 403)
+        status, _ = self.req("POST", "/api/config/import",
+                             body={"use_custom": True},
+                             origin="https://evil.example.com")
+        self.assertEqual(status, 403)
+
     def test_update_status_endpoint(self):
         status, body = self.req("GET", "/api/gallery/update/status")
         self.assertEqual(status, 200)

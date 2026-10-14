@@ -561,6 +561,10 @@
         .then(function () { busy(btn, false); });
     });
 
+    // 设置：配置文件导入 / 导出
+    bindConfigTransfer();
+    bindGlobalDrop();
+
     // 刷新 / 弹层
     $("btnRefresh").addEventListener("click", function () {
       loadState(); loadGallery(); toast("已刷新");
@@ -585,6 +589,146 @@
         if (!r.ok) { toast((r.body && r.body.error) || "打开失败", "err"); }
       }).catch(function () { toast("连接中断", "err"); })
       .then(function () { busy(btn, false); });
+  }
+
+  // ------------------------------------------------------- 设置导入 / 导出
+
+  var FIELD_LABELS = {
+    desktop: "桌面轮换", lock: "锁屏轮换", use_pjsk: "pjsk 图库开关",
+    use_custom: "自定义图库开关", cap_pjsk: "pjsk 容量上限", update: "图库更新设置"
+  };
+  var MAX_CONFIG_BYTES = 256 * 1024;
+
+  function exportConfig(btn) {
+    busy(btn, true);
+    api("/api/config/export").then(function (r) {
+      if (r.status !== 200 || !r.body || !r.body.config) {
+        toast("导出失败", "err");
+        return;
+      }
+      var text = JSON.stringify(r.body, null, 2);
+      var blob = new Blob([text], { type: "application/json" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "pjsk-wallpaper-settings.json";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+      toast("设置已导出", "ok");
+    }).catch(function () {
+      toast("导出失败：连接中断", "err");
+    }).then(function () { busy(btn, false); });
+  }
+
+  function importConfigFile(file) {
+    var banner = $("configImportStatus");
+    if (!file) { return; }
+    if (file.size > MAX_CONFIG_BYTES) {
+      setBanner(banner, "err", "文件过大（应小于 256KB）：" + file.name);
+      return;
+    }
+    setBanner(banner, "", "正在导入 " + file.name + " …");
+    var reader = new FileReader();
+    reader.onload = function () {
+      var payload;
+      try {
+        payload = JSON.parse(String(reader.result));
+      } catch (err) {
+        setBanner(banner, "err", "不是合法的 JSON 文件：" + err.message);
+        toast("导入失败：JSON 格式错误", "err");
+        return;
+      }
+      api("/api/config/import", { method: "POST", body: payload })
+        .then(function (r) {
+          var b = r.body || {};
+          if (r.ok && b.ok) {
+            var names = (b.applied || []).map(function (k) {
+              return FIELD_LABELS[k] || k;
+            });
+            var msg = "已导入 " + names.length + " 项：" +
+                      (names.join("、") || "（无可应用项）");
+            if (b.warnings && b.warnings.length) {
+              msg += "；" + b.warnings.join("；");
+            }
+            setBanner(banner, "ok", msg);
+            toast("设置已导入", "ok");
+            if (b.state) {
+              S = b.state;
+              offset = (S.server_time || Date.now() / 1000) - Date.now() / 1000;
+              render(S);
+            } else { loadState(); }
+          } else {
+            var errs = (b.errors || []).join("；") || "导入失败";
+            var warn = (b.warnings && b.warnings.length)
+              ? "（" + b.warnings.join("；") + "）" : "";
+            setBanner(banner, "err", "导入失败：" + errs + warn);
+            toast("导入失败", "err");
+            loadState();          // 回退显示后端真实值
+          }
+        }).catch(function () {
+          setBanner(banner, "err", "导入失败：连接中断");
+        });
+    };
+    reader.onerror = function () {
+      setBanner(banner, "err", "读取文件失败");
+    };
+    reader.readAsText(file, "utf-8");
+  }
+
+  function bindConfigTransfer() {
+    $("btnExportConfig").addEventListener("click", function () { exportConfig(this); });
+    $("btnImportConfig").addEventListener("click", function () {
+      $("configFileInput").click();
+    });
+    $("configFileInput").addEventListener("change", function (e) {
+      importConfigFile(e.target.files && e.target.files[0]);
+      e.target.value = "";
+    });
+    var dz = $("configDropzone");
+    ["dragenter", "dragover"].forEach(function (ev) {
+      dz.addEventListener(ev, function (e) {
+        e.preventDefault(); dz.classList.add("over");
+      });
+    });
+    ["dragleave", "drop"].forEach(function (ev) {
+      dz.addEventListener(ev, function (e) {
+        e.preventDefault(); dz.classList.remove("over");
+      });
+    });
+    dz.addEventListener("drop", function (e) {
+      var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      importConfigFile(f);
+    });
+    dz.addEventListener("click", function () { $("configFileInput").click(); });
+    dz.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault(); $("configFileInput").click();
+      }
+    });
+  }
+
+  function bindGlobalDrop() {
+    // 应用窗口里拖放文件时，避免浏览器直接打开/导航；json 视为设置文件
+    function inZone(node, selector) {
+      return !!(node && node.closest && node.closest(selector));
+    }
+    document.addEventListener("dragover", function (e) { e.preventDefault(); });
+    document.addEventListener("drop", function (e) {
+      if (inZone(e.target, "#dropzone") || inZone(e.target, "#configDropzone")) {
+        return;                       // 交给各自的拖放区域处理
+      }
+      e.preventDefault();
+      var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f) { return; }
+      if (/\.json$/i.test(f.name)) {
+        var tab = document.querySelector('.tabs button[data-view="settings"]');
+        if (tab) { tab.click(); }
+        importConfigFile(f);
+      } else {
+        toast("图片请拖到「图库」页的上传区域", "err");
+      }
+    });
   }
 
   function loadLog() {

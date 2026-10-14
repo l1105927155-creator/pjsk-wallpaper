@@ -59,15 +59,26 @@ class WebUiTest(unittest.TestCase):
         for need in ("deskNext", "lockNext", "btnUpdate", "btnUpdate2",
                      "fileInput", "dropzone", "galleryGrid", "pagePrev", "pageNext",
                      "setAutostart", "btnShortcuts", "setCap", "setUpChara",
-                     "setUpUnit", "setUpRarity", "setUpCount", "lightbox", "logModal"):
+                     "setUpUnit", "setUpRarity", "setUpCount", "lightbox", "logModal",
+                     "btnExportConfig", "btnImportConfig", "configFileInput",
+                     "configDropzone", "configImportStatus"):
             self.assertIn(f'id="{need}"', self.html, f"缺少控件 {need}")
+
+    def test_config_transfer_controls(self):
+        """导入：拖放 + 文件选择；导出：按钮；且只接受 .json。"""
+        self.assertRegex(self.html, r'id="configFileInput"[^>]*accept="[^"]*\.json')
+        self.assertIn('id="configDropzone"', self.html)
+        self.assertIn("importConfigFile", self.js)
+        self.assertIn("exportConfig", self.js)
+        self.assertIn("FileReader", self.js)
 
     def test_all_new_endpoints_used(self):
         for ep in ("/api/state", "/api/config", "/api/wallpaper/desktop/next",
                    "/api/wallpaper/lock/next", "/api/gallery", "/api/images/",
                    "/api/gallery/custom", "/api/gallery/update",
                    "/api/gallery/update/log", "/api/system/autostart",
-                   "/api/system/open-folder", "/api/system/create-shortcuts"):
+                   "/api/system/open-folder", "/api/system/create-shortcuts",
+                   "/api/config/export", "/api/config/import"):
             self.assertIn(ep, self.js, f"前端未使用接口 {ep}")
 
     def test_no_absolute_paths_in_frontend(self):

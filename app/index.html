@@ -257,14 +257,33 @@
         </article>
 
         <article class="card">
-          <div class="card-head"><h2>关于</h2></div>
-          <p class="muted small">
-            本页是本机壁纸服务的控制台，页面关闭/刷新/浏览器崩溃都不会停止后台轮换。<br>
-            只有系统托盘菜单的「退出」才会结束后台进程。<br>
-            程序不联网、不开放局域网；界面资源全部本地加载。
-          </p>
+          <div class="card-head"><div><h2>配置文件</h2>
+            <div class="card-sub">导出备份 / 导入「轮换、更新」等设置（不含图片）</div></div></div>
+          <div class="row">
+            <button type="button" class="btn primary" id="btnExportConfig">导出设置</button>
+            <button type="button" class="btn" id="btnImportConfig">导入设置…</button>
+            <input type="file" id="configFileInput" accept=".json,application/json" class="hidden">
+          </div>
+          <div class="dropzone" id="configDropzone" style="margin-top:12px"
+               tabindex="0" role="button"
+               aria-label="拖入或选择配置文件">
+            把 <code>config.json</code> 拖到这里，或点击选择文件<br>
+            <span class="small muted">接受本程序导出的设置文件，或原始 config.json；导入前会做格式与取值校验</span>
+          </div>
+          <div class="banner hidden" id="configImportStatus"></div>
         </article>
       </div>
+
+      <article class="card">
+        <div class="card-head"><h2>关于</h2></div>
+        <p class="muted small">
+          本页是本机壁纸服务的控制台，页面关闭/刷新/浏览器崩溃都不会停止后台轮换。<br>
+          只有系统托盘菜单的「退出」才会结束后台进程。<br>
+          程序不联网、不开放局域网；界面资源全部本地加载。<br>
+          图库位置固定为程序目录下的 <code>library/pjsk</code> 与 <code>library/custom</code>，
+          导入设置不会影响图片文件。
+        </p>
+      </article>
     </section>
   </main>
 </div>

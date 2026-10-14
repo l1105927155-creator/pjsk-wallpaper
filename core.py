@@ -17,6 +17,7 @@ from PIL import Image
 import win_startup
 
 APP_DIR = Path(__file__).resolve().parent
+APP_NAME = "pjsk-wallpaper"
 CONFIG_PATH = APP_DIR / "config.json"
 LIB_DIR = APP_DIR / "library"
 PJSK_DIR = LIB_DIR / "pjsk"

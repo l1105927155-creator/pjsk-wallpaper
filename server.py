@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import core
 
-APP_NAME = "pjsk-wallpaper"
+APP_NAME = core.APP_NAME
 APP_DIR = Path(__file__).resolve().parent
 WEB_DIR = APP_DIR / "app"
 RUNTIME_DIR = APP_DIR / "runtime"
@@ -190,6 +190,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _api_get(self, path, qs):
         if path == "/api/state":
             self._send_json(self.rt.state())
+        elif path == "/api/config/export":
+            self._send_json(self.rt.export_config())
         elif path == "/api/gallery":
             self._send_json(self.rt.gallery_page(
                 offset=int((qs.get("offset") or ["0"])[0] or 0),
@@ -210,6 +212,12 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/config":
             ok, errors, warnings = self.rt.apply_config(payload)
             self._send_json({"ok": ok, "errors": errors, "warnings": warnings,
+                             "state": self.rt.state() if ok else None},
+                            200 if ok else 400)
+        elif path == "/api/config/import":
+            ok, errors, warnings, applied = self.rt.import_config(payload)
+            self._send_json({"ok": ok, "errors": errors, "warnings": warnings,
+                             "applied": applied,
                              "state": self.rt.state() if ok else None},
                             200 if ok else 400)
         elif path == "/api/wallpaper/desktop/next":

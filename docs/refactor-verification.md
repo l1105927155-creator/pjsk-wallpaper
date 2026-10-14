@@ -64,3 +64,17 @@
 6. **同类留意项（未改动）**：安装向导「创建桌面和开始菜单快捷方式」未勾选时同样不动作，
    因此升级时若旧快捷方式指向已移除的 `wallpaper.pyw` 会失效。因涉及删除用户桌面上的
    快捷方式，本轮不擅自处理；如需「未勾选即清理旧快捷方式」的行为可再提需求。
+
+7. **超出原文档范围、按用户要求新增的功能**（原 `docs/` 未要求，经用户确认后实施）：
+
+   - **设置导入 / 导出**：`GET /api/config/export` 导出可迁移设置快照；
+     `POST /api/config/import` 接受导出的信封**或原始 `config.json`**，复用 `apply_config`
+     的同一套字段与范围校验，非法内容整体拒绝、不做部分写入。
+     `screen`（本机分辨率）、`autostart`（本机自启）、`update.last_run`（运行时状态）
+     被明确识别并忽略（导出时移入 `machine`，导入时给出说明），避免换机器后引入错误配置。
+     界面支持拖入 / 选择文件导入，并回显「已导入 N 项」或逐条错误。
+   - **图库目录未做可配置化**：按用户确认，保持程序目录下的相对路径
+     `library/pjsk`、`library/custom` 不变，因此受控 ID 映射与路径穿越防护的边界不变。
+
+   对应测试：`tests/test_runtime.py::ConfigImportExportTest`、`tests/test_server.py`、
+   `tests/test_web_ui.py::test_config_transfer_controls`。
