@@ -111,8 +111,8 @@
 
   /* 取状态：首次与动作后立即返回；之后带上已知修订号长轮询，
      后端在状态变化的同一时刻唤醒它。
-     这样「切换壁纸」时前端能立刻拿到新图并开始过渡，
-     而不是等下一次固定周期轮询——那正是预览比桌面晚一步的原因。 */
+     这样「切换壁纸」时前端不必等下一次固定周期轮询就能知道新图——
+     那正是预览比桌面晚一步的原因。预览的起步时刻另由 preview_delay_ms 推迟。 */
   function loadState() {
     var mine = ++pollSeq;
     if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
@@ -129,6 +129,7 @@
       connected = true;
       S = r.body;
       offset = (S.server_time || Date.now() / 1000) - Date.now() / 1000;
+      if (typeof S.preview_delay_ms === "number") { previewDelay = S.preview_delay_ms; }
       render(S);
       schedulePoll();
     }).catch(function () {
@@ -192,15 +193,19 @@
   // ------------------------------------------------- 壁纸预览（与切换同步）
 
   // 与 styles.css 的 --wall-fade 必须一致。
-  // Windows 换壁纸的 shell 淡入时长未公开，取观感接近的固定值。
-  var WALL_FADE_MS = 600;
+  // 900ms 是实测的 Windows 换壁纸淡入时长（本机 8 次落在 851~934ms）。
+  var WALL_FADE_MS = 900;
+  // 后端下发切换后、桌面真正开始淡入的实测时长（见 runtime.PREVIEW_DELAY_MS）。
+  // 预览等这么久再起步，才能和桌面背景同时开始过渡。
+  var PREVIEW_DELAY_MS = 500;
+  var previewDelay = PREVIEW_DELAY_MS;   // 实际取值以状态里的 preview_delay_ms 为准
   var wallSeq = { desk: 0, lock: 0 };
 
   /* 预览换图，并做与桌面背景相同的交叉淡入。
      两层设计：上层是当前图，下层是即将生效的新图。
      新图先整幅就位，再让上层淡出把它「揭」出来 —— 这就是一次交叉过渡，
      且角色不互换，<prefix>Img 始终代表当前壁纸。 */
-  function setWall(prefix, url) {
+  function setWall(prefix, url, delayMs) {
     var cur = $(prefix + "Img"), buf = $(prefix + "ImgBuf");
     if (!url) {                                   // 无图：两层都清空
       wallSeq[prefix]++;
@@ -212,7 +217,7 @@
       buf.removeAttribute("src");
       return;
     }
-    if (url === cur.dataset.url) { return; }       // 已经是当前图，不动
+    if (url === cur.dataset.url) { return; }       // 已经（或已排定为）当前图，不动
 
     if (!cur.dataset.url) {                        // 首图：没有旧图可淡出
       cur.dataset.url = url;
@@ -222,10 +227,17 @@
     }
 
     var my = ++wallSeq[prefix];                    // 连点「下一张」时只认最后一次
+    var prevUrl = cur.dataset.url;
+    // 立刻登记目标：切换完成时后端会再推一次状态（那次 current 已是新图、
+    // pending 为空），没有这个标记就会在延迟窗口内把过渡提前触发一遍。
+    cur.dataset.url = url;
+    // 淡出的「到点时刻」。按排定时刻算而不是「加载完再等」：
+    // 取图本身也要时间，否则起步会被加载耗时往后推。
+    var due = Date.now() + (delayMs || 0);
+
     var settle = function () {
       // 过渡结束：把新图搬到上层并立即恢复不透明。
       // 此刻下层是同图，即使上层还没绘制完也看不出跳变。
-      cur.dataset.url = url;
       cur.classList.remove("fading");
       var done = function () {
         cur.onload = cur.onerror = null;
@@ -243,15 +255,22 @@
       if (!ok) {                                   // 新图取不到：保留当前图，不做过渡
         buf.classList.remove("show");
         buf.removeAttribute("src");
+        cur.dataset.url = prevUrl;                 // 撤销登记，别把当前图卡住
         return;
       }
-      buf.classList.add("show");                   // 新图就位（下层，无过渡）
-      cur.classList.add("fading");                 // 旧图淡出，揭示新图
-      setTimeout(function () {
+      buf.classList.add("show");                   // 新图就位（下层、无过渡，被上层盖住）
+      var fade = function () {
         if (wallSeq[prefix] !== my) { return; }
-        settle();
-      }, WALL_FADE_MS + 50);
+        cur.classList.add("fading");               // 旧图淡出，揭示新图
+        setTimeout(function () {
+          if (wallSeq[prefix] !== my) { return; }
+          settle();
+        }, WALL_FADE_MS + 50);
+      };
+      var wait = due - Date.now();                 // 等够提前量再开始淡出
+      if (wait > 0) { setTimeout(fade, wait); } else { fade(); }
     };
+    // 立刻取图（缩略图已在后端预热过，通常很快）；淡出由 due 控制
     buf.onload = function () { ready(true); };
     buf.onerror = function () { ready(false); };
     buf.setAttribute("src", url);
@@ -260,10 +279,14 @@
   function renderWall(prefix, w) {
     var ph = $(prefix + "Placeholder"), badge = $(prefix + "Badge");
     // 应用中的目标优先：后端在写系统壁纸之前就广播了它，
-    // 预览因此与系统过渡同一时刻开始，而不是等切换完成后才补上。
+    // 这样预览不必等切换完成才补上。
     var show = w.pending || w.current;
+    // 但起步要等到系统真的要换桌面了：后端下发之后，系统还要花约 0.5s
+    // 才真正开始淡入（实测），提前量由后端给出，免得预览先动半秒。
+    // 锁屏没有可见的系统过渡，不需要等。
+    var delay = (w.pending && prefix === "desk") ? previewDelay : 0;
     if (show && show.id) {
-      setWall(prefix, imgUrl(show.id, 1024));
+      setWall(prefix, imgUrl(show.id, 1024), delay);
       ph.classList.add("hidden");
       badge.textContent = show.name;
       badge.classList.remove("hidden");

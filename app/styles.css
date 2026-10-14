@@ -22,9 +22,10 @@
   --shadow: 0 8px 24px rgba(0, 0, 0, .35);
   --gap: 16px;
   --font: "Microsoft YaHei UI", "Segoe UI", system-ui, -apple-system, sans-serif;
-  /* 壁纸切换过渡时长：与 app.js 的 WALL_FADE_MS 必须一致，
-     用来让预览与桌面背景的过渡在观感上相同（改这里要同时改那边）。 */
-  --wall-fade: 600ms;
+  /* 壁纸切换过渡时长：与 app.js 的 WALL_FADE_MS 必须一致。
+     900ms 是实测的 Windows 换壁纸淡入时长（本机 8 次 851~934ms），
+     用它才能让预览与桌面背景的过渡在观感上相同（改这里要同时改那边）。 */
+  --wall-fade: 900ms;
 }
 
 * { box-sizing: border-box; }
