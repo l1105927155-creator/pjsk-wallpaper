@@ -107,7 +107,12 @@ def find_chara(text: str, chara_names: dict):
     for cid, names in chara_names.items():
         full = f"{names.get('firstName', '')}{names.get('givenName', '')}"
         if t in full.lower() or t in names.get("givenName", "").lower():
-            return cid
+            # i18n character_name.json 的键是字符串，统一转 int 以便与
+            # cards 的 characterId(int) 比较（旧版返回字符串导致中文名筛选恒为空）
+            try:
+                return int(cid)
+            except (TypeError, ValueError):
+                return None
     return None
 
 

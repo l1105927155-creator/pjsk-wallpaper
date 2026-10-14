@@ -180,5 +180,65 @@ class ImageProcessingTest(unittest.TestCase):
             self.assertTrue(p1.exists() and p2.exists())
 
 
+class GalleryQueryTest(unittest.TestCase):
+    """受控 ID 映射与路径穿越防护。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        td = Path(self._tmp.name)
+        self.pjsk = td / "pjsk"
+        self.custom = td / "custom"
+        self.pjsk.mkdir()
+        self.custom.mkdir()
+        (self.pjsk / "card_1.png").write_bytes(b"x")
+        (self.custom / "my.jpg").write_bytes(b"x")
+        (td / "secret.png").write_bytes(b"x")   # 库外文件
+        self.addCleanup(self._tmp.cleanup)
+        self._p1 = mock.patch.object(core, "PJSK_DIR", self.pjsk)
+        self._p2 = mock.patch.object(core, "CUSTOM_DIR", self.custom)
+        self._p1.start()
+        self._p2.start()
+        self.addCleanup(self._p1.stop)
+        self.addCleanup(self._p2.stop)
+
+    def test_counts_and_list(self):
+        self.assertEqual(core.library_counts(), {"pjsk": 1, "custom": 1, "total": 2})
+        ids = [it["id"] for it in core.library_list()]
+        self.assertEqual(ids, ["custom/my.jpg", "pjsk/card_1.png"])
+
+    def test_list_filter(self):
+        got = [it["id"] for it in core.library_list(source="pjsk")]
+        self.assertEqual(got, ["pjsk/card_1.png"])
+        got = [it["id"] for it in core.library_list(keyword="my")]
+        self.assertEqual(got, ["custom/my.jpg"])
+
+    def test_resolve_valid(self):
+        p = core.resolve_image_id("pjsk/card_1.png")
+        self.assertIsNotNone(p)
+        self.assertEqual(p.name, "card_1.png")
+
+    def test_reject_traversal_and_unknown(self):
+        for bad in ("pjsk/../secret.png", "../secret.png", "pjsk/..\\secret.png",
+                    "pjsk/card_1.png/extra", "other/card_1.png",
+                    "pjsk/sub/card_1.png", "pjsk/card_1.txt", "", "pjsk/",
+                    "/etc/passwd", "pjsk/\x00card_1.png"):
+            self.assertIsNone(core.resolve_image_id(bad), f"应拒绝: {bad!r}")
+
+
+class UpdateLogTest(unittest.TestCase):
+    def test_read_tail(self):
+        with tempfile.TemporaryDirectory() as td:
+            logs = Path(td) / "logs"
+            logs.mkdir()
+            (logs / "update.log").write_text("a\nb\nc\n", "utf-8")
+            with mock.patch.object(core, "APP_DIR", Path(td)):
+                self.assertEqual(core.read_update_log(2), ["b", "c"])
+
+    def test_missing_log(self):
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.object(core, "APP_DIR", Path(td)):
+                self.assertEqual(core.read_update_log(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

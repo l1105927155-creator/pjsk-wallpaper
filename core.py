@@ -81,7 +81,12 @@ def config_load() -> dict:
 
 
 def config_save(cfg: dict):
-    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), "utf-8")
+    """原子写盘：先写同目录临时文件再 os.replace，避免中途失败留下截断的 JSON。"""
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(cfg, ensure_ascii=False, indent=2)
+    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
+    tmp.write_text(text, "utf-8")
+    os.replace(tmp, CONFIG_PATH)
 
 
 # ---------- 图片处理 ----------
@@ -123,6 +128,95 @@ def scan_library(cfg: dict):
         if use and d.is_dir():
             files += [p for p in d.iterdir() if p.suffix.lower() in IMAGE_EXTS]
     return sorted(files, key=lambda p: p.name)
+
+
+# ---------- 图库查询（对 Web API 暴露受控 ID，前端不接触绝对路径） ----------
+
+def _sources() -> dict:
+    return {"pjsk": PJSK_DIR, "custom": CUSTOM_DIR}
+
+
+def _iter_source(source: str):
+    d = _sources().get(source)
+    if d and d.is_dir():
+        for p in d.iterdir():
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTS:
+                yield p
+
+
+def library_counts() -> dict:
+    pjsk = sum(1 for _ in _iter_source("pjsk"))
+    custom = sum(1 for _ in _iter_source("custom"))
+    return {"pjsk": pjsk, "custom": custom, "total": pjsk + custom}
+
+
+def library_list(source: str = "all", keyword: str = "") -> list:
+    """列出图库条目。id 形如 "<source>/<name>"，由服务端映射回本地文件。"""
+    sources = ["pjsk", "custom"] if source in ("all", "", None) else [source]
+    kw = (keyword or "").strip().lower()
+    items = []
+    for s in sources:
+        for p in _iter_source(s):
+            if kw and kw not in p.name.lower():
+                continue
+            st = p.stat()
+            items.append({"id": f"{s}/{p.name}", "source": s, "name": p.name,
+                          "size": st.st_size, "mtime": st.st_mtime})
+    items.sort(key=lambda it: (it["source"], it["name"]))
+    return items
+
+
+def resolve_image_id(image_id: str):
+    """把受控 ID 解析为本地文件路径；拒绝目录穿越、未知来源与非图片。"""
+    if not isinstance(image_id, str):
+        return None
+    parts = image_id.split("/")
+    if len(parts) != 2:
+        return None
+    source, name = parts
+    base = _sources().get(source)
+    if base is None or not name:
+        return None
+    # 文件名必须是纯文件名：不含路径分隔符与 ..，避免穿越与符号链接越界
+    if name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
+        return None
+    if Path(name).suffix.lower() not in IMAGE_EXTS:
+        return None
+    path = (base / name)
+    try:
+        real = path.resolve(strict=True)
+        root = base.resolve(strict=True)
+    except OSError:
+        return None
+    if real.parent != root or not real.is_file():
+        return None
+    return real
+
+
+def read_update_log(lines: int = 80) -> list:
+    p = APP_DIR / "logs" / "update.log"
+    if not p.is_file():
+        return []
+    try:
+        text = p.read_text("utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    return text[-max(1, int(lines)):]
+
+
+def system_info(screen=None) -> dict:
+    """只读系统信息，供 Web UI 展示（不含任何可写权限）。"""
+    return {
+        "app_dir": str(APP_DIR),
+        "pjsk_dir": str(PJSK_DIR),
+        "custom_dir": str(CUSTOM_DIR),
+        "screen": list(screen) if screen else detect_screen(),
+        "autostart": autostart_on(),
+        "shortcuts": shortcuts_exist(),
+        "platform": sys.platform,
+        "python": sys.version.split()[0],
+    }
+
 
 
 class Rotator:

@@ -62,10 +62,9 @@
 
 ## 已知问题（重构中处理，需评审）
 
-1. **中文角色筛选静默失效**：`gallery_update.find_chara()` 从 i18n `character_name.json`（键为字符串）匹配时返回 **字符串** id，而 `pick_candidates` 用 `card["characterId"]`(int) `== cid`(str) 比较恒为假 → 中文名（如「奏」）筛选得到空池，报「筛选条件下没有卡片」。罗马音别名（如 `kanade`）与纯数字 id 走另一分支返回 int，正常。
+1. **中文角色筛选静默失效（已修复）**：`gallery_update.find_chara()` 从 i18n `character_name.json`（键为字符串）匹配时返回 **字符串** id，而 `pick_candidates` 用 `card["characterId"]`(int) `== cid`(str) 比较恒为假 → 中文名（如「奏」）筛选得到空池，报「筛选条件下没有卡片」。罗马音别名（如 `kanade`）与纯数字 id 走另一分支返回 int，正常。
    - 影响：`ui-refactor.md` 要求保留「角色/组合筛选」，旧版该输入实际不可用。
-   - 处理：阶段2 以最小改动修复（统一返回 int），并在提交信息与看板标注；修复后更新本文件与单测。
-   - 现由 `tests/test_gallery_update.py::test_find_chara_chinese_name_returns_str_known_bug` 锁定旧行为，修复时同步改写。
+   - 处理：阶段2 以最小改动修复（统一返回 `int(cid)`），保留罗马音别名与数字 id 行为；单测改为断言正确行为。
 
 2. **配置每 20 秒整表回写**：`_tick` 每次都 `config_save`，且 `_collect_config` 用 UI 值整体覆盖。Web 化后改为「变更即校验保存」，不再周期性回写（`architecture-refactor.md` 明确要求）。
 

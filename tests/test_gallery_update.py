@@ -31,16 +31,15 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(gu.find_chara("21", {}), 21)
         self.assertIsNone(gu.find_chara("nobody", {}))
 
-    def test_find_chara_chinese_name_returns_str_known_bug(self):
-        """【已知问题·修复前锁定当前行为】按 i18n 名字匹配时返回字符串 id，
-        使 pick_candidates 的 characterId(int) == cid(str) 恒不成立，中文角色筛选静默失效。
-        详见 docs/baseline-behavior.md「已知问题」。"""
+    def test_find_chara_chinese_name(self):
+        """i18n 名字匹配应返回 int（旧版返回字符串导致中文名筛选静默失效，已修复）。"""
         names = {"17": {"firstName": "宵崎", "givenName": "奏"}}
-        self.assertEqual(gu.find_chara("奏", names), "17")
+        self.assertEqual(gu.find_chara("奏", names), 17)
         pool = gu.pick_candidates(
-            [{"id": 1, "characterId": 17, "cardRarityType": "rarity_4"}],
-            {"chara": "奏"}, names, {17: "school_refusal"})
-        self.assertEqual(pool, [])
+            [{"id": 1, "characterId": 17, "cardRarityType": "rarity_4"},
+             {"id": 2, "characterId": 5, "cardRarityType": "rarity_4"}],
+            {"chara": "奏"}, names, {17: "school_refusal", 5: "idol"})
+        self.assertEqual([c["id"] for c in pool], [1])
 
 
 class PickCandidateTest(unittest.TestCase):
