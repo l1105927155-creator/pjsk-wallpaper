@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import tkinter as tk
 import urllib.request
@@ -275,15 +276,38 @@ class Wizard(tk.Tk):
 
     def _install(self, dest: Path):
         try:
+            # 向导上一步的检查与真正复制之间有时间窗，覆盖前再确认一次实例
+            # 已退出；检测到就中止，一个字节都不覆盖。
+            if running_instance_in(dest) is not None:
+                self._result_ok = False
+                self.after(0, self._instance_reappeared)
+                return
+
             self._step("正在复制文件...")
-            for name in INSTALL_FILES:
-                src = SRC / name
-                if src.exists():
-                    shutil.copy2(src, dest / name)
-            for name in INSTALL_DIRS:
-                src = SRC / name
-                if src.is_dir():
-                    shutil.copytree(src, dest / name, dirs_exist_ok=True)
+            backup = self._backup_program_files(dest)
+            try:
+                for name in INSTALL_FILES:
+                    src = SRC / name
+                    if src.exists():
+                        shutil.copy2(src, dest / name)
+                for name in INSTALL_DIRS:
+                    src = SRC / name
+                    if src.is_dir():
+                        shutil.copytree(src, dest / name, dirs_exist_ok=True)
+            except Exception as copy_err:
+                # 复制中途失败：把备份的原程序文件放回去，尽量不留混合版本
+                self._step("正在恢复原程序文件...")
+                failed = self._restore_program_files(backup, dest)
+                if failed:
+                    raise RuntimeError(
+                        f"复制失败（{copy_err}），且恢复原程序文件未完成："
+                        f"{'；'.join(failed)}。程序文件可能处于新旧混合状态，"
+                        "请重新运行安装向导修复。") from copy_err
+                self._step("已恢复原程序文件。")
+                raise
+            finally:
+                shutil.rmtree(backup, ignore_errors=True)
+
             # 升级：移除旧版 Tkinter 入口，避免残留两套启动方式
             for name in LEGACY_FILES:
                 old = dest / name
@@ -310,6 +334,56 @@ class Wizard(tk.Tk):
             msg = str(e)
             self.after(0, lambda: self._fatal(msg))
         self.after(0, self._install_done)
+
+    def _backup_program_files(self, dest: Path) -> Path:
+        """覆盖前把将被替换/删除的程序文件备份到临时目录，供失败时还原。
+
+        只备份程序文件（INSTALL_FILES / INSTALL_DIRS / LEGACY_FILES），
+        config.json、library/、cache/、logs/ 等用户数据不碰也不备份。
+        """
+        backup = Path(tempfile.mkdtemp(prefix="pjsk-install-backup-"))
+        for name in INSTALL_FILES + LEGACY_FILES:
+            src = dest / name
+            if src.is_file():
+                shutil.copy2(src, backup / name)
+        for name in INSTALL_DIRS:
+            src = dest / name
+            if src.is_dir():
+                shutil.copytree(src, backup / name, dirs_exist_ok=True)
+        return backup
+
+    def _restore_program_files(self, backup: Path, dest: Path) -> list:
+        """把备份的程序文件放回目标目录；返回未能恢复的条目（不抛异常）。"""
+        failed = []
+        dest.mkdir(parents=True, exist_ok=True)
+        for name in INSTALL_FILES + LEGACY_FILES:
+            src = backup / name
+            if not src.is_file():
+                continue
+            try:
+                shutil.copy2(src, dest / name)
+            except OSError as e:
+                failed.append(f"{name}（{e}）")
+        for name in INSTALL_DIRS:
+            src = backup / name
+            if not src.is_dir():
+                continue
+            try:
+                shutil.copytree(src, dest / name, dirs_exist_ok=True)
+            except OSError as e:
+                failed.append(f"{name}/（{e}）")
+        return failed
+
+    def _instance_reappeared(self):
+        """覆盖前复查发现实例又在运行：中止安装（未覆盖任何文件）。"""
+        from tkinter import messagebox
+        messagebox.showwarning(
+            "安装向导",
+            "安装过程中检测到 pjsk 壁纸 又重新启动了。\n\n"
+            "已中止安装，没有覆盖任何程序文件。请结束程序后重新运行安装向导。",
+            parent=self)
+        self.destroy()
+
 
     def _pip_failed(self):
         from tkinter import messagebox

@@ -9,6 +9,7 @@
 import importlib.util
 import json
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -383,7 +384,11 @@ class InstallPreservesUserDataTest(unittest.TestCase):
 
             fake = types.SimpleNamespace(_step=lambda msg: None,
                                          after=lambda *args: None,
-                                         _install_done=lambda: None)
+                                         _install_done=lambda: None,
+                                         _fatal=lambda msg=None: None,
+                                         _instance_reappeared=lambda: None,
+                                         _backup_program_files=lambda d: inst.Wizard._backup_program_files(fake, d),
+                                         _restore_program_files=lambda b, d: inst.Wizard._restore_program_files(fake, b, d))
             with mock.patch.object(inst, "SRC", src), \
                     mock.patch.object(inst, "INSTALL_FILES",
                                       ["launcher.pyw", "core.py"]), \
@@ -427,6 +432,127 @@ class InstallerUpgradeInvariantTest(unittest.TestCase):
         self.assertIn("/api/identity", self.src)
         for banned in ("msedge", "chrome.exe"):
             self.assertNotIn(banned, self.src)
+
+
+class InstallSafetyTest(unittest.TestCase):
+    """整改 P2：向导检查与复制之间有时间窗；复制失败要能恢复原程序文件。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.td = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def _make(self):
+        """源目录（新版本）与目标目录（旧版本 + 用户数据）。"""
+        src, dest = self.td / "src", self.td / "dest"
+        (src / "app").mkdir(parents=True)
+        (src / "app" / "index.html").write_text("new-index", "utf-8")
+        (src / "launcher.pyw").write_text("new-launcher", "utf-8")
+        (src / "core.py").write_text("new-core", "utf-8")
+        dest.mkdir()
+        (dest / "launcher.pyw").write_text("old-launcher", "utf-8")
+        (dest / "app").mkdir()
+        (dest / "app" / "index.html").write_text("old-index", "utf-8")
+        (dest / "config.json").write_text('{"user": 1}', "utf-8")
+        return src, dest
+
+    def _fake(self):
+        steps, scheduled, destroyed = [], [], []
+        fake = types.SimpleNamespace(
+            _step=steps.append,
+            after=lambda delay, fn=None, *a, **k:
+                scheduled.append(fn) if callable(fn) else None,
+            _install_done=lambda: steps.append("_install_done"),
+            pb=types.SimpleNamespace(stop=lambda: None),
+            var_dir=types.SimpleNamespace(get=lambda: str(self.td / "dest")),
+            _show=lambda view: steps.append("_show:" + view),
+            destroy=lambda: destroyed.append(1),
+        )
+        # 绑定真实的收尾方法（弹窗已由 _drain 打桩），只替换 destroy
+        fake._fatal = lambda msg=None: inst.Wizard._fatal(fake, msg)
+        fake._instance_reappeared = lambda: inst.Wizard._instance_reappeared(fake)
+        fake._backup_program_files = lambda d: inst.Wizard._backup_program_files(fake, d)
+        fake._restore_program_files = lambda b, d: inst.Wizard._restore_program_files(fake, b, d)
+        return fake, steps, scheduled, destroyed
+
+    def _drain(self, scheduled):
+        """按真实顺序执行 after() 排队的回调，收集弹窗正文（a[1] 是消息文本）。"""
+        shown = []
+        from tkinter import messagebox
+        with mock.patch.object(messagebox, "showwarning",
+                               lambda *a, **k: shown.append(a[1])), \
+                mock.patch.object(messagebox, "showerror",
+                                  lambda *a, **k: shown.append(a[1])):
+            for fn in list(scheduled):
+                fn()
+        return shown
+
+    def test_rechecks_instance_before_copying(self):
+        """向导检查通过后、复制前实例又启动：必须中止且不覆盖任何文件。"""
+        src, dest = self._make()
+        fake, steps, scheduled, destroyed = self._fake()
+        with mock.patch.object(inst, "SRC", src), \
+                mock.patch.object(inst, "INSTALL_FILES", ["launcher.pyw"]), \
+                mock.patch.object(inst, "INSTALL_DIRS", ["app"]), \
+                mock.patch.object(inst, "running_instance_in", lambda d: {"port": 1}):
+            inst.Wizard._install(fake, dest)
+        self.assertEqual((dest / "launcher.pyw").read_text("utf-8"), "old-launcher")
+        self.assertEqual((dest / "app" / "index.html").read_text("utf-8"), "old-index")
+        self.assertFalse(fake._result_ok)
+        shown = self._drain(scheduled)      # 弹窗与 destroy 都发生在 after 回调里
+        self.assertTrue(destroyed, "应中止安装流程")
+        self.assertTrue(any("重新启动" in s for s in shown), shown)
+
+    def test_restores_original_files_when_copy_fails(self):
+        """复制中途 I/O 失败：把备份的原程序文件放回去，不留混合版本。"""
+        src, dest = self._make()
+        fake, steps, scheduled, destroyed = self._fake()
+        real_copy2 = shutil.copy2
+        calls = {"n": 0}
+
+        def flaky_copy2(s_, d_, *a, **k):
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise OSError("disk full")
+            return real_copy2(s_, d_, *a, **k)
+
+        with mock.patch.object(inst, "SRC", src), \
+                mock.patch.object(inst, "INSTALL_FILES",
+                                  ["launcher.pyw", "core.py"]), \
+                mock.patch.object(inst, "INSTALL_DIRS", ["app"]), \
+                mock.patch.object(inst, "running_instance_in", lambda d: None), \
+                mock.patch.object(inst.shutil, "copy2", flaky_copy2):
+            inst.Wizard._install(fake, dest)
+        self.assertEqual((dest / "launcher.pyw").read_text("utf-8"), "old-launcher")
+        self.assertEqual((dest / "app" / "index.html").read_text("utf-8"), "old-index")
+        self.assertFalse((dest / "core.py").exists(), "失败前未写入的文件不应出现")
+        self.assertEqual((dest / "config.json").read_text("utf-8"), '{"user": 1}')
+        shown = self._drain(scheduled)
+        self.assertTrue(any("安装失败" in s and "disk full" in s for s in shown), shown)
+
+    def test_reports_mixed_state_when_restore_also_fails(self):
+        """复制失败且恢复也不完整：必须明确提示，不能让用户以为升级成功。"""
+        src, dest = self._make()
+        fake, steps, scheduled, destroyed = self._fake()
+        real_copy2 = shutil.copy2
+
+        def flaky_copy2(s_, d_, *a, **k):
+            if str(d_).startswith(str(dest)):
+                raise OSError("disk full")
+            return real_copy2(s_, d_, *a, **k)
+
+        with mock.patch.object(inst, "SRC", src), \
+                mock.patch.object(inst, "INSTALL_FILES",
+                                  ["launcher.pyw", "core.py"]), \
+                mock.patch.object(inst, "INSTALL_DIRS", ["app"]), \
+                mock.patch.object(inst, "running_instance_in", lambda d: None), \
+                mock.patch.object(inst.shutil, "copy2", flaky_copy2), \
+                mock.patch.object(inst.Wizard, "_restore_program_files",
+                                  lambda self_, b, d: ["launcher.pyw（boom）"]):
+            inst.Wizard._install(fake, dest)
+        self.assertFalse(fake._result_ok)
+        shown = self._drain(scheduled)
+        self.assertTrue(any("新旧混合" in s and "disk full" in s for s in shown), shown)
 
 
 if __name__ == "__main__":
