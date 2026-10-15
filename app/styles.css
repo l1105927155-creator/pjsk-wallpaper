@@ -75,7 +75,9 @@ button, input, select { font-family: inherit; font-size: inherit; color: inherit
 }
 
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.brand img { width: 34px; height: 34px; border-radius: 10px; }
+/* 头部 logo：用独立的清晰原图（带透明通道），按高度等比缩放，不拉伸变形。
+   （图标本身是 296×256，比原先 32×32 的 icon.png 放大后清晰得多） */
+.brand img { height: 34px; width: auto; flex: none; }
 .brand .title { font-size: 16px; font-weight: 600; letter-spacing: .2px; }
 
 .tabs { display: flex; gap: 4px; background: var(--panel); padding: 4px;
