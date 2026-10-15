@@ -13,6 +13,7 @@
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import threading
@@ -28,6 +29,10 @@ LOG_TAIL_LINES = 200
 EXPORT_VERSION = 1         # 设置文件格式版本
 STATE_WAIT_MAX = 25        # /api/state 长轮询最长挂起秒数
 PREVIEW_WIDTH = 1024       # 概览预览的缩略图宽度（与前端 imgUrl(id, 1024) 一致）
+UPDATE_TIMEOUT_SECONDS = 1200   # 图库更新子进程的最长运行时间（超时则终止）
+# 图库更新子进程的进度标记，格式由 gallery_update.progress() 产出：
+#   [进度] 已下载/总计
+_UPDATE_PROGRESS_RE = re.compile(r"\[进度\]\s*(\d+)/(\d+)")
 
 # 可写字段的合法范围（与旧版 Spinbox 范围一致）
 _INT_RANGES = {
@@ -44,10 +49,14 @@ _REGIONS = {"jp", "cn", "en", "kr", "tw"}
 # 可迁移（会真正应用）的顶层字段
 _IMPORTABLE_TOP = {"desktop", "lock", "use_pjsk", "use_custom", "cap_pjsk", "update"}
 # 本机相关：识别但忽略（不随配置迁移）
-_IGNORED_TOP = {"screen": "本机屏幕分辨率", "autostart": "本机开机自启"}
+_IGNORED_TOP = {"screen": "本机屏幕分辨率", "autostart": "本机开机自启",
+                "close_action": "本机关闭行为"}
 _IMPORTABLE_UPDATE = {"count", "min_rarity", "interval", "interval_enabled",
                       "chara", "unit", "region", "trained"}
 _IGNORED_UPDATE = {"last_run": "上次更新时间（运行时状态）"}
+
+# 前端窗口关闭行为（close_action）的合法取值；None = 每次询问
+CLOSE_ACTIONS = ("exit", "tray")
 
 
 def _no_window() -> int:
@@ -79,10 +88,12 @@ class Runtime:
             "finished_at": None,
             "ok": None,
             "message": "",
+            "progress": None,       # {"done": 已下载, "total": 总计}，仅更新中有效
         }
         self._desk_busy = False
         self._lock_busy = False
         self._proc = None
+        self._close_prompt = False      # 前端关闭确认框的待投递请求
         self._stop = threading.Event()
         self._thread = None
         self._tick = max(1, int(tick_seconds))
@@ -215,11 +226,15 @@ class Runtime:
                        if up.get("interval_enabled") else None)
             rev = self._rev
             pend = dict(self._pending)
+            # 关闭确认请求只投递一次：读到即视为已送达前端
+            close_prompt = self._close_prompt
+            self._close_prompt = False
         counts = core.library_counts()
         return {
             "server_time": now,
             "rev": rev,
             "status": self._status,
+            "close_prompt": close_prompt,
             "config": cfg,
             "desktop": {
                 "enabled": bool(cfg["desktop"]["enabled"]),
@@ -247,6 +262,7 @@ class Runtime:
                 "finished_at": self._update["finished_at"],
                 "ok": self._update["ok"],
                 "message": self._update["message"],
+                "progress": dict(self._update["progress"] or {}) or None,
                 "next": up_next if up_next else None,
                 "interval_enabled": bool(cfg["update"]["interval_enabled"]),
             },
@@ -256,6 +272,16 @@ class Runtime:
     def _set_status(self, msg: str):
         with self._lock:
             self._status = msg
+            self._bump()
+
+    def request_close_prompt(self):
+        """请前端弹出「关闭窗口」确认框。
+
+        走既有的状态推送通道：置标志并 +1 修订号，挂起中的长轮询立刻返回，
+        前端在收到状态时弹框。这样宿主无需向页面注入脚本求值。
+        """
+        with self._lock:
+            self._close_prompt = True
             self._bump()
 
     @staticmethod
@@ -410,12 +436,33 @@ class Runtime:
         with self._lock:
             return deepcopy(self._cfg)
 
+    def set_close_action(self, value):
+        """保存前端窗口的关闭行为，返回 (ok, errors)。
+
+        `value`：None（每次询问）/ "exit"（退出程序）/ "tray"（最小化到系统托盘）。
+        与 apply_config 相同的「先落盘、成功后再发布」语义：落盘失败时内存保持原值。
+        """
+        if value is not None and value not in CLOSE_ACTIONS:
+            return False, ["close_action 需要 null、exit 或 tray"]
+        with self._lock:
+            if self._cfg.get("close_action") == value:
+                return True, []
+            new = deepcopy(self._cfg)
+            new["close_action"] = value
+            try:
+                core.config_save(new)
+            except OSError as e:
+                return False, [f"保存配置失败：{e}"]
+            self._cfg = new
+            self._bump()
+        return True, []
+
     # ------------------------------------------------------------------ 设置导入 / 导出
 
     def export_config(self) -> dict:
         """导出设置快照。
 
-        - 只包含**可在机器之间迁移**的设置；`screen`、`autostart`、
+        - 只包含**可在机器之间迁移**的设置；`screen`、`autostart`、`close_action`、
           `update.last_run` 属本机/运行时状态，放在 `machine`/不含在 `config` 内。
         - 不含任何图片，也不含绝对路径。
         """
@@ -423,6 +470,7 @@ class Runtime:
             cfg = deepcopy(self._cfg)
         screen = cfg.pop("screen", None)
         cfg.pop("autostart", None)
+        cfg.pop("close_action", None)
         cfg.get("update", {}).pop("last_run", None)
         return {
             "app": core.APP_NAME,
@@ -622,7 +670,7 @@ class Runtime:
                 return {"ok": False, "busy": True, "message": "更新已在进行中"}
             now = time.time()
             self._update.update(running=True, started_at=now, finished_at=None,
-                                ok=None, message="更新中…")
+                                ok=None, message="更新中…", progress=None)
             self._update["last_run"] = now
             self._up_anchor = now
             # 与 apply_config 共用同一把锁完成「改内存 + 落盘」，
@@ -639,32 +687,72 @@ class Runtime:
         return {"ok": True, "busy": False, "message": "已开始更新"}
 
     def _run_update(self):
-        msg, ok = "更新失败", False
+        """执行图库更新子进程，并把它的进度**逐行**读出来实时发布。
+
+        子进程每下完一张就打印一行进度标记；这里随读随发布并 +1 修订号，
+        挂起中的长轮询立刻返回，界面不必等整个更新结束才知道进展。
+        子进程的 stdout/stderr 合并到同一管道：既避免只读一条管道时另一条被写满卡死，
+        也让失败时能把最后一行原因（含未捕获异常的回溯尾行）如实报出来。
+        """
+        msg, ok, timed_out = "更新失败", False, False
         try:
             cmd = [sys.executable, "-X", "utf8", str(core.APP_DIR / "gallery_update.py")]
-            self._proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 encoding="utf-8", errors="replace", creationflags=_no_window())
+            self._proc = proc
+
+            def _kill_on_timeout():
+                nonlocal timed_out
+                timed_out = True
+                proc.kill()
+
+            killer = threading.Timer(UPDATE_TIMEOUT_SECONDS, _kill_on_timeout)
+            killer.daemon = True
+            killer.start()
+            tail = []
             try:
-                out, err = self._proc.communicate(timeout=1200)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-                out, err = self._proc.communicate()
-            rc = self._proc.returncode
-            tail = (out or "").strip().splitlines()
-            if rc == 0:
+                for line in proc.stdout:
+                    line = line.strip()
+                    if line:
+                        tail.append(line)
+                    self._note_progress(line)
+                rc = proc.wait()
+            finally:
+                killer.cancel()
+
+            if timed_out:
+                msg = f"失败: 更新超时（超过 {UPDATE_TIMEOUT_SECONDS // 60} 分钟）"
+            elif rc == 0:
                 ok, msg = True, f"完成: {tail[-1] if tail else '无输出'}"
             else:
-                msg = "失败: " + ((err or "").strip()[-200:] or f"退出码 {rc}")
+                reason = tail[-1] if tail else f"退出码 {rc}"
+                for prefix in ("更新失败: ", "更新失败："):
+                    if reason.startswith(prefix):
+                        reason = reason[len(prefix):]
+                        break
+                msg = "失败: " + reason[-200:]
         except Exception as e:
             msg = f"失败: {e}"
         finally:
             self._proc = None
         with self._lock:
             self._update.update(running=False, finished_at=time.time(),
-                                ok=ok, message=msg)
+                                ok=ok, message=msg, progress=None)
             self._bump()
         self._set_status(msg)
+
+    def _note_progress(self, line: str):
+        """解析子进程的一行输出；是进度标记就立刻发布出去。"""
+        m = _UPDATE_PROGRESS_RE.search(line or "")
+        if not m:
+            return
+        prog = {"done": int(m.group(1)), "total": int(m.group(2))}
+        with self._lock:
+            if self._update.get("progress") == prog:
+                return
+            self._update["progress"] = prog
+            self._bump()
 
     def update_status(self) -> dict:
         with self._lock:

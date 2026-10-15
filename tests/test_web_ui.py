@@ -115,7 +115,8 @@ class WebUiTest(unittest.TestCase):
                    "/api/gallery/custom", "/api/gallery/update",
                    "/api/gallery/update/log", "/api/system/autostart",
                    "/api/system/open-folder", "/api/system/create-shortcuts",
-                   "/api/config/export", "/api/config/import"):
+                   "/api/config/export", "/api/config/import",
+                   "/api/window/close"):
             self.assertIn(ep, self.js, f"前端未使用接口 {ep}")
 
     def test_no_absolute_paths_in_frontend(self):
@@ -179,6 +180,72 @@ class WebUiTest(unittest.TestCase):
         self.assertIn('api("/api/state" + q)', self.js)
         self.assertIn('"?since=" + S.rev + "&wait=" + POLL_WAIT', self.js)
         self.assertNotIn("POLL_MS", self.js, "固定周期轮询应已被长轮询取代")
+
+    # ------------------------------------------------- 关闭确认（窗口与进程绑定）
+
+    def test_close_dialog_controls_present(self):
+        for need in ("closeModal", "closeRemember", "closeConfirm",
+                     "closeCancel", "closeStatus"):
+            self.assertIn(f'id="{need}"', self.html, f"缺少控件 {need}")
+        # 两个互斥选项：最小化到托盘 / 退出程序
+        actions = re.findall(r'name="closeAction"\s+value="([^"]+)"', self.html)
+        self.assertEqual(sorted(actions), ["exit", "tray"])
+
+    def test_close_dialog_contract_with_host(self):
+        """宿主请求弹框与页面回报结果的通道必须与后端一致，否则窗口关闭会
+        静默退化成「隐藏到托盘」或点了确认没反应。"""
+        launcher = (ROOT / "launcher.pyw").read_text("utf-8")
+        server_src = (ROOT / "server.py").read_text("utf-8")
+        runtime_src = (ROOT / "runtime.py").read_text("utf-8")
+        # 宿主 → 页面：走状态推送，不注入脚本
+        self.assertIn("self._rt.request_close_prompt()", launcher)
+        self.assertIn("def request_close_prompt(", runtime_src)
+        self.assertIn("if (S.close_prompt) { promptClose(); }", self.js)
+        self.assertNotIn(".evaluate_js(", launcher)   # 不向页面注入脚本求值
+        # 页面 → 宿主：走本机 HTTP
+        self.assertIn('api("/api/window/close"', self.js)
+        self.assertIn('"/api/window/close"', server_src)
+        self.assertIn("ui.close_window(", server_src)
+        self.assertIn("def close_window(", launcher)
+
+    def test_close_dialog_is_wired_to_buttons(self):
+        self.assertIn('$("closeConfirm").addEventListener("click", confirmClose)', self.js)
+        self.assertIn('$("closeCancel").addEventListener("click", hideCloseDialog)', self.js)
+        # 键盘可关闭（Esc），与其它弹层一致
+        self.assertIn('e.key === "Escape"', self.js)
+
+    # ------------------------------------------------- 更新按钮的 loading 状态
+
+    def test_update_progress_displayed(self):
+        """更新进度「已下载/总计」要显示在状态、横幅与顶部状态灯里
+        （否则更新期间用户不知道要等多久）。"""
+        self.assertIn("function updateProgressSuffix(u)", self.js)
+        self.assertIn('("更新中…" + updateProgressSuffix(u))', self.js)
+        self.assertIn('"图库更新进行中" + updateProgressSuffix(u)', self.js)
+        # 按钮禁用仍由后端状态决定（不能因为加了进度就改回本地计时解除）
+        self.assertIn("applyUpdateBusy(u.running);", self.js)
+        self.assertNotIn('busy($("btnUpdate"), u.running);', self.js)
+
+    def test_update_button_busy_state_follows_backend(self):
+        """「立即更新」的禁用状态必须以后端 update.running 为准。
+
+        曾在请求链末尾无条件 `busy(btn, false)`：长轮询每次回来重新 render 之后
+        又把它解除，更新期间按钮一直可点、看不到 loading。解除禁用只能发生在
+        「连接中断、拿不到状态」这一条分支上（否则按钮会永久卡住）。
+        """
+        m = re.search(r"function doUpdate\(btn\) \{(.*?)\n  \}", self.js, re.S)
+        self.assertIsNotNone(m, "未找到 doUpdate")
+        body = m.group(1)
+        self.assertIn("busy(btn, true);", body)                      # 点击即反馈
+        self.assertIn("return loadState();", body)                   # 以状态为准
+        # 不能再回到旧写法：在请求链尾无条件解除禁用（其它按钮不受状态驱动，无此问题）
+        self.assertNotIn(").then(function () { busy(btn, false); });", body)
+        # 兜底看门狗（等不到状态）与连接中断分支各解除一次，共两处
+        self.assertIn("if (updateBusySeq === seen) {", body)
+        self.assertEqual(body.count("busy(btn, false);"), 2,
+                         "兜底看门狗与连接中断各一处，其余交给后端状态决定")
+        self.assertIn("function applyUpdateBusy(running)", self.js)  # 按状态统一设置
+        self.assertIn("var updateBusySeq = 0;", self.js)             # 兜底看门狗的判据
 
 
 if __name__ == "__main__":

@@ -63,6 +63,9 @@ DEFAULT_CONFIG = {
         "last_run": 0.0,
     },
     "autostart": False,
+    # 前端窗口点关闭时的行为：None=每次询问 / "exit"=退出程序 / "tray"=最小化到系统托盘
+    # （本机偏好，不随设置文件迁移）
+    "close_action": None,
 }
 
 

@@ -68,6 +68,14 @@ def log(msg: str):
         pass
 
 
+def progress(done: int, total: int):
+    """报告下载进度，格式 `[进度] 已下载/总计`（供 runtime 逐行解析后推给界面）。
+
+    只走 stdout，不写进用户看的 update.log——它是过程中转、不是历史记录。
+    """
+    print(f"[进度] {done}/{total}", flush=True)
+
+
 def fetch_json(url: str, fresh: bool = False):
     core.CACHE_DIR.mkdir(parents=True, exist_ok=True)
     name = re.sub(r"[^A-Za-z0-9._-]", "_", url.split("//", 1)[1])
@@ -193,7 +201,9 @@ def run_update(cfg: dict) -> list:
     picked = rng.sample(pool_sorted, min(count, len(pool_sorted)))
 
     added = []
-    for card in picked:
+    total = len(picked)
+    progress(0, total)          # 先报总数，界面从这一刻起就能显示「0/总计」
+    for done, card in enumerate(picked, 1):
         trained = bool(up.get("trained"))
         img_bytes, img_url = download_card_image(card, urls, trained)
         name = f"card_{card['id']}{'_trained' if trained else ''}.png"
@@ -204,6 +214,7 @@ def run_update(cfg: dict) -> list:
         prefix = prefix_i18n.get(str(card["id"]), "")
         added.append((card["id"], chara, prefix))
         log(f"+ {name}  {chara} «{prefix}»")
+        progress(done, total)
 
     enforce_cap(cap)
     return added

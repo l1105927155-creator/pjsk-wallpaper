@@ -297,6 +297,27 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/system/create-shortcuts":
             res = self.rt.create_shortcuts()
             self._send_json(res, 200 if res["ok"] else 500)
+        elif path == "/api/window/show":
+            # 单实例：第二次启动的进程通过它唤起已有实例的前端窗口
+            ui = getattr(self.server, "ui", None)
+            if ui is None:
+                self._error(501, "当前实例没有前端窗口")
+                return
+            try:
+                ui.show_window()
+            except Exception:
+                self._error(500, "唤起前端窗口失败")
+                return
+            self._send_json({"ok": True})
+        elif path == "/api/window/close":
+            # 前端关闭确认框的结果：由持有窗口的进程执行，前端只负责展示与上报
+            ui = getattr(self.server, "ui", None)
+            if ui is None:
+                self._error(501, "当前实例没有前端窗口")
+                return
+            res = ui.close_window(payload.get("action"),
+                                  bool(payload.get("remember")))
+            self._send_json(res, 200 if res.get("ok") else 400)
         else:
             self._error(404, "not found")
 
@@ -450,10 +471,12 @@ def _valid_image(data: bytes) -> bool:
 class WallpaperServer:
     """HTTP 服务 + 运行时生命周期管理。"""
 
-    def __init__(self, runtime, port: int = DEFAULT_PORT, host="127.0.0.1"):
+    def __init__(self, runtime, port: int = DEFAULT_PORT, host="127.0.0.1",
+                 ui=None):
         self.runtime = runtime
         self.host = host
         self.token = secrets.token_hex(16)
+        self.ui = ui                     # 前端窗口控制器（无 UI 实例时为 None）
         self.httpd = None
         self.port = None
         self._port_start = port
@@ -471,6 +494,7 @@ class WallpaperServer:
             httpd.daemon_threads = True
             httpd.runtime = self.runtime
             httpd.token = self.token
+            httpd.ui = self.ui
             self.httpd = httpd
             self.port = port
             return port
@@ -486,10 +510,14 @@ class WallpaperServer:
         threading.Thread(target=self.serve_forever, name="http", daemon=True).start()
 
     def write_port_file(self):
+        """写下本实例的接入信息（app/端口/进程/令牌），供启动器识别与唤起。
+
+        文件只在本机程序目录内，不对外暴露；`/api/identity` 也不会把它泄给页面。
+        """
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         PORT_FILE.write_text(json.dumps(
             {"app": APP_NAME, "port": self.port, "pid": os.getpid(),
-             "started": time.time()}), "utf-8")
+             "token": self.token, "started": time.time()}), "utf-8")
 
     def clear_port_file(self):
         try:

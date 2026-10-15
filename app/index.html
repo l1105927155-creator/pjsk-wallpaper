@@ -16,7 +16,7 @@
       <img src="assets/icon.png" alt="">
       <div>
         <div class="title">pjsk 壁纸</div>
-        <div class="small muted">本机壁纸控制台 · 关闭本页不影响后台轮换</div>
+        <div class="small muted">本机壁纸控制台 · 关闭窗口时由你选择是否退出后台</div>
       </div>
     </div>
 
@@ -279,8 +279,9 @@
       <article class="card">
         <div class="card-head"><h2>关于</h2></div>
         <p class="muted small">
-          本页是本机壁纸服务的控制台，页面关闭/刷新/浏览器崩溃都不会停止后台轮换。<br>
-          只有系统托盘菜单的「退出」才会结束后台进程。<br>
+          本页是本机壁纸服务的控制台。窗口最小化即隐藏到系统托盘，不占用任务栏。<br>
+          点关闭时会询问「最小化到系统托盘 / 退出程序」，可勾选「不再显示」记住选择。<br>
+          只有选择「退出程序」或系统托盘菜单的「退出」才会结束后台进程。<br>
           程序不联网、不开放局域网；界面资源全部本地加载。<br>
           图库位置固定为程序目录下的 <code>library/pjsk</code> 与 <code>library/custom</code>，
           导入设置不会影响图片文件。
@@ -309,6 +310,36 @@
       <button type="button" class="btn ghost close" id="logClose">关闭</button>
     </div>
     <div class="box-body"><div class="log" id="logBody">加载中…</div></div>
+  </div>
+</div>
+
+<!-- 关闭确认 -->
+<div class="modal hidden" id="closeModal" role="dialog" aria-modal="true"
+     aria-labelledby="closeModalTitle">
+  <div class="box">
+    <div class="box-head"><b id="closeModalTitle">关闭窗口</b></div>
+    <div class="box-body">
+      <p class="hint" style="margin:0 0 4px">关闭窗口本身不会停止后台轮换，请选择本次的处理方式：</p>
+      <label class="opt">
+        <input type="radio" name="closeAction" value="tray" checked>
+        <span><b>最小化到系统托盘</b>
+          <span class="small muted">后台继续按间隔轮换壁纸；可从托盘图标重新打开窗口</span></span>
+      </label>
+      <label class="opt">
+        <input type="radio" name="closeAction" value="exit">
+        <span><b>退出程序</b>
+          <span class="small muted">结束后台轮换、定时任务与更新子进程，等同托盘菜单的「退出」</span></span>
+      </label>
+      <label class="switch" style="margin-top:12px">
+        <input type="checkbox" id="closeRemember">
+        <span class="track"></span><span class="label">不再显示（记住本次选择）</span>
+      </label>
+      <div class="banner hidden" id="closeStatus"></div>
+    </div>
+    <div class="box-foot">
+      <button type="button" class="btn" id="closeCancel">取消</button>
+      <button type="button" class="btn primary" id="closeConfirm">确认</button>
+    </div>
   </div>
 </div>
 

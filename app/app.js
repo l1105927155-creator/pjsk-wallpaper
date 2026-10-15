@@ -89,6 +89,17 @@
     btn.classList.toggle("busy", !!on);
   }
 
+  // 「立即更新」按钮的忙碌状态只有一个来源：后端 update.running。
+  // 每次按状态设置都 +1，供点击后的兜底判断使用（见 doUpdate 的看门狗）：
+  // 计数没动 = 这次点击之后一次状态都没成功应用到按钮上。
+  var updateBusySeq = 0;
+
+  function applyUpdateBusy(running) {
+    updateBusySeq++;
+    busy($("btnUpdate"), running);
+    busy($("btnUpdate2"), running);
+  }
+
   // ---------------------------------------------------------------- 状态
 
   var S = null;            // 最近一次 /api/state 的返回
@@ -131,6 +142,9 @@
       S = r.body;
       offset = (S.server_time || Date.now() / 1000) - Date.now() / 1000;
       render(S);
+      // 宿主在「用户点了关闭且未保存过选择」时经状态推送请求弹确认框；
+      // 不靠窗口直接向页面注入脚本，因此这条通道与页面刷新、长轮询一致可靠。
+      if (S.close_prompt) { promptClose(); }
       schedulePoll();
     }).catch(function () {
       if (mine !== pollSeq) { return; }
@@ -142,9 +156,17 @@
 
   var TAB_TITLES = { overview: "概览", gallery: "图库", settings: "设置" };
 
+  // 更新进度后缀「已下载/总计」：下载还没开始时后端没有总数，只显示「更新中…」
+  function updateProgressSuffix(u) {
+    if (!u || !u.progress || !u.progress.total) { return ""; }
+    return " " + u.progress.done + "/" + u.progress.total;
+  }
+
   function render(s) {
     // 顶部状态
-    if (s.update.running) { setPill("busy", "图库更新中…"); }
+    if (s.update.running) {
+      setPill("busy", "图库更新中…" + updateProgressSuffix(s.update));
+    }
     else if (s.status && s.status.indexOf("失败") >= 0) { setPill("err", s.status); }
     else { setPill("ok", "运行中"); }
 
@@ -168,11 +190,13 @@
 
     // 更新状态
     var u = s.update;
-    $("upState").textContent = u.running ? "更新中…" : (u.message || "空闲");
+    $("upState").textContent = u.running
+      ? ("更新中…" + updateProgressSuffix(u)) : (u.message || "空闲");
     $("upLast").textContent = fmtTime(u.last_run);
     $("upNext").textContent = u.interval_enabled ? fmtTime(u.next) : "—（未启用间隔更新）";
     if (u.running) {
-      setBanner($("updateBanner"), "warn", "图库更新进行中，完成后会自动刷新计数。");
+      setBanner($("updateBanner"), "warn",
+        "图库更新进行中" + updateProgressSuffix(u) + "，完成后会自动刷新计数。");
     } else if (u.ok === false) {
       setBanner($("updateBanner"), "err", u.message || "上次更新失败");
     } else if (u.ok === true) {
@@ -180,8 +204,7 @@
     } else {
       setBanner($("updateBanner"), "", "");
     }
-    busy($("btnUpdate"), u.running);
-    busy($("btnUpdate2"), u.running);
+    applyUpdateBusy(u.running);
 
     // 设置区（同步后端最新值）
     syncSettings(s);
@@ -381,16 +404,36 @@
     }).then(function () { busy(btn, false); });
   }
 
+  // 点击「立即更新」后，等不到任何一次状态更新的兜底时限。
+  // 判据是「有没有拿到过状态」，不是「更新跑了多久」——图库更新可能要几分钟，
+  // 按时长解除会把正在更新时的 loading 弄丢。
+  var UPDATE_STATE_TIMEOUT_MS = 15000;
+
   function doUpdate(btn) {
-    busy(btn, true);
+    busy(btn, true);           // 点击即反馈，不等状态刷新
+    var seen = updateBusySeq;
+    var watchdog = setTimeout(function () {
+      // 状态一直没刷新成功（服务无响应、连接异常、页面渲染出错）时，不能把按钮
+      // 永久卡在 loading：解除并说明，让用户还能重试或刷新页面。
+      if (updateBusySeq === seen) {
+        busy(btn, false);
+        toast("未能确认更新状态，请刷新页面查看", "err");
+      }
+    }, UPDATE_STATE_TIMEOUT_MS);
     api("/api/gallery/update", { method: "POST", body: {} }).then(function (r) {
       var b = r.body || {};
       if (b.ok) { toast("已开始图库更新", "ok"); }
       else if (b.busy) { toast("更新已在进行中", "err"); }
       else { toast(b.message || "无法开始更新", "err"); }
+      // 刷新后由 render() 按后端 update.running 决定按钮是否禁用：
+      // 这里不能再无条件解除禁用，否则会把正在更新时的 loading 状态覆盖掉。
       return loadState();
-    }).catch(function () { toast("更新失败：连接中断", "err"); })
-      .then(function () { busy(btn, false); });
+    }).catch(function () {
+      // 连接中断时不会有状态刷新，必须自己解除禁用，否则按钮会一直卡住
+      clearTimeout(watchdog);
+      toast("更新失败：连接中断", "err");
+      busy(btn, false);
+    });
   }
 
   // ---------------------------------------------------------------- 图库
@@ -539,6 +582,16 @@
     $("btnLog").addEventListener("click", loadLog);
     $("logClose").addEventListener("click", function () {
       $("logModal").classList.add("hidden");
+    });
+
+    // 关闭确认弹窗（宿主在用户点窗口关闭按钮时唤起）
+    $("closeCancel").addEventListener("click", hideCloseDialog);
+    $("closeConfirm").addEventListener("click", confirmClose);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !$("closeModal").classList.contains("hidden")) {
+        e.preventDefault();
+        hideCloseDialog();
+      }
     });
 
     // 图库
@@ -837,6 +890,55 @@
       $("logBody").textContent = lines.length ? lines.join("\n") : "暂无更新日志。";
       $("logBody").scrollTop = $("logBody").scrollHeight;
     }).catch(function () { $("logBody").textContent = "读取失败：连接中断"; });
+  }
+
+  // ---------------------------------------------------------------- 关闭确认
+
+  // 用户点窗口关闭按钮、且没有保存过选择时，宿主（launcher.pyw 的内嵌 WebView）
+  // 会经状态推送置一个 close_prompt 标志，本页在收到状态时弹出确认框；
+  // 用户的选择再经本机 HTTP 接口回报给持有窗口的进程执行。
+  // 用浏览器打开本页时没有可控制的窗口，接口会如实返回不支持。
+
+  function closeDialog() { return $("closeModal"); }
+
+  function hideCloseDialog() {
+    closeDialog().classList.add("hidden");
+    setBanner($("closeStatus"), null, "");
+    $("closeConfirm").disabled = false;
+  }
+
+  function confirmClose() {
+    var picked = document.querySelector('input[name="closeAction"]:checked');
+    if (!picked) { return; }
+    var btn = $("closeConfirm");
+    btn.disabled = true;
+    setBanner($("closeStatus"), null, "");
+    api("/api/window/close", {
+      method: "POST",
+      body: { action: picked.value, remember: $("closeRemember").checked }
+    }).then(function (r) {
+      btn.disabled = false;
+      var b = r.body || {};
+      if (r.status === 200 && b.ok) { hideCloseDialog(); return; }
+      setBanner($("closeStatus"), "err",
+                typeof b.error === "string" ? b.error : "操作失败，请重试。");
+    }).catch(function () {
+      btn.disabled = false;
+      setBanner($("closeStatus"), "err", "操作失败：连接中断");
+    });
+  }
+
+  function promptClose() {
+    var dlg = closeDialog();
+    if (!dlg || !dlg.classList.contains("hidden")) { return true; }
+    $("closeRemember").checked = false;
+    var dflt = document.querySelector('input[name="closeAction"][value="tray"]');
+    if (dflt) { dflt.checked = true; }
+    setBanner($("closeStatus"), null, "");
+    $("closeConfirm").disabled = false;
+    dlg.classList.remove("hidden");
+    $("closeConfirm").focus();
+    return true;
   }
 
   // ---------------------------------------------------------------- 启动

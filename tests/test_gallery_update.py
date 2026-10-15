@@ -3,6 +3,8 @@
 
 不触网：只测不发起请求的函数。
 """
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -15,6 +17,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import core  # noqa: E402
 import gallery_update as gu  # noqa: E402
+import runtime as rt  # noqa: E402
+
+
+class ProgressMarkerTest(unittest.TestCase):
+    """进度标记是 gallery_update → runtime 的跨进程契约，两处必须一致。"""
+
+    def test_progress_line_matches_runtime_parser(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            gu.progress(2, 3)
+        line = buf.getvalue().strip()
+        # 必须是干净的「[进度] 已下载/总计」：不带 update.log 的时间戳前缀，
+        # 否则 runtime 的解析器和界面的「已下载/总计」都会带上日志时间。
+        self.assertEqual(line, "[进度] 2/3")
+        m = rt._UPDATE_PROGRESS_RE.search(line)
+        self.assertIsNotNone(m, f"runtime 解析不到进度行: {line}")
+        self.assertEqual((int(m.group(1)), int(m.group(2))), (2, 3))
 
 
 class ParseTest(unittest.TestCase):

@@ -42,8 +42,9 @@ def running_instance_in(dest: Path):
     """目标安装目录里是否仍有本应用的后台实例在运行；有则返回其信息，否则 None。
 
     判断依据只有两条——该实例自己发布的端口文件，以及 `/api/identity` 的身份应答：
-    **不看浏览器窗口是否关闭**（关掉 Web 窗口并不代表后台进程退出），也不按进程名
-    或 PID 猜测，避免误判、误杀无关进程。
+    **不看前端窗口是否关闭**（关窗可能只是最小化到托盘，后台照旧在跑；只有选
+    「退出程序」或托盘「退出」才结束进程），也不按进程名或 PID 猜测，避免误判、
+    误杀无关进程。
     """
     try:
         info = json.loads((Path(dest) / "runtime" / "server.json").read_text("utf-8"))
@@ -223,9 +224,9 @@ class Wizard(tk.Tk):
     def _confirm_not_running(self, dest: Path) -> bool:
         """覆盖程序文件前确认目标目录里没有正在运行的本应用实例。
 
-        关掉浏览器窗口不代表后台进程已退出；带病覆盖会让运行中的实例继续用旧模块
-        而磁盘已换成新代码。检测到实例时明确提示并要求用户从托盘正常退出后重试，
-        不做任何进程查杀。
+        关掉前端窗口不代表后台进程已退出（关窗可能只是最小化到托盘）；带病覆盖会让
+        运行中的实例继续用旧模块而磁盘已换成新代码。检测到实例时明确提示并要求用户
+        正常退出后重试，不做任何进程查杀。
         """
         info = running_instance_in(dest)
         if info is None:
@@ -235,8 +236,10 @@ class Wizard(tk.Tk):
             "安装向导",
             "检测到 pjsk 壁纸 正在后台运行"
             + (f"（进程 {info.get('pid')}）" if info.get("pid") else "") + "。\n\n"
-            "请从系统托盘的「退出」结束它，然后重新点击「下一步」。\n"
-            "仅关闭浏览器窗口不会结束后台进程。",
+            "请先结束它，再重新点击「下一步」：\n"
+            "· 右键系统托盘图标，选择「退出」；或\n"
+            "· 关闭前端窗口时选择「退出程序」。\n"
+            "仅最小化或关闭窗口（若已记住「最小化到系统托盘」）不会结束后台进程。",
             parent=self)
         return False
 
@@ -292,7 +295,7 @@ class Wizard(tk.Tk):
                         pass
 
             self._step("正在检查运行环境...")
-            r = subprocess.run([sys.executable, "-c", "import PIL"],
+            r = subprocess.run([sys.executable, "-c", "import PIL, webview"],
                                capture_output=True)
             if r.returncode != 0:
                 self._step("正在安装依赖（首次需要联网，约十几秒）...")
@@ -311,7 +314,7 @@ class Wizard(tk.Tk):
     def _pip_failed(self):
         from tkinter import messagebox
         messagebox.showwarning("安装向导",
-                               "依赖 Pillow 自动安装失败。\n"
+                               "依赖（Pillow / pywebview）自动安装失败。\n"
                                "请稍后在命令行手动执行：\n"
                                "pip install -r requirements.txt", parent=self)
 

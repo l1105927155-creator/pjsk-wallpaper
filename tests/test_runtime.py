@@ -397,6 +397,66 @@ class UpdateTest(RuntimeBase):
                            ["update"]["last_run"], 0)
 
 
+class UpdateProgressTest(RuntimeBase):
+    """图库更新的下载进度：子进程逐行输出 → 运行时逐行发布 → 状态立即可见。"""
+
+    def test_note_progress_publishes_and_bumps(self):
+        r = rt.Runtime(tick_seconds=9999)
+        rev = r.state()["rev"]
+        r._note_progress("[进度] 2/3")
+        st = r.state()
+        self.assertEqual(st["update"]["progress"], {"done": 2, "total": 3})
+        self.assertGreater(st["rev"], rev)          # 修订号 +1 → 挂起长轮询立刻返回
+        # 非进度行（含时间戳的普通日志）忽略，且不重复发布
+        r._note_progress("2026-10-14 20:00:00  + card_1.png  奏 «33»")
+        self.assertEqual(r.state()["update"]["progress"], {"done": 2, "total": 3})
+        self.assertEqual(r.state()["rev"], st["rev"])
+
+    def test_run_update_streams_progress_lines(self):
+        r = rt.Runtime(tick_seconds=9999)
+        app = Path(tempfile.mkdtemp(prefix="pjsk-stub-"))
+        (app / "gallery_update.py").write_text(
+            "print('[进度] 0/2', flush=True)\n"
+            "print('[进度] 1/2', flush=True)\n"
+            "print('[进度] 2/2', flush=True)\n", "utf-8")
+        seen = []
+        with mock.patch.object(core, "APP_DIR", app), \
+                mock.patch.object(r, "_note_progress",
+                                  lambda line: seen.append(line)):
+            r._run_update()
+        self.assertEqual([l for l in seen if "[进度]" in l],
+                         ["[进度] 0/2", "[进度] 1/2", "[进度] 2/2"])
+        st = r.update_status()
+        self.assertTrue(st["ok"])
+        self.assertTrue(st["message"].startswith("完成:"))
+        self.assertIsNone(st["progress"])           # 结束后进度清空（running 也为 False）
+
+    def test_run_update_reports_reason_on_failure(self):
+        r = rt.Runtime(tick_seconds=9999)
+        app = Path(tempfile.mkdtemp(prefix="pjsk-stub-"))
+        (app / "gallery_update.py").write_text(
+            "print('[进度] 0/1', flush=True)\n"
+            "print('更新失败: RuntimeError: 筛选条件下没有卡片')\n"
+            "raise SystemExit(1)\n", "utf-8")
+        with mock.patch.object(core, "APP_DIR", app):
+            r._run_update()
+        st = r.update_status()
+        self.assertFalse(st["ok"])
+        self.assertIn("筛选条件下没有卡片", st["message"])
+        self.assertIsNone(st["progress"])
+
+    def test_run_update_timeout_kills_child(self):
+        r = rt.Runtime(tick_seconds=9999)
+        app = Path(tempfile.mkdtemp(prefix="pjsk-stub-"))
+        (app / "gallery_update.py").write_text("import time; time.sleep(30)\n", "utf-8")
+        with mock.patch.object(core, "APP_DIR", app), \
+                mock.patch.object(rt, "UPDATE_TIMEOUT_SECONDS", 0.5):
+            r._run_update()
+        st = r.update_status()
+        self.assertFalse(st["ok"])
+        self.assertIn("超时", st["message"])
+
+
 class ConfigImportExportTest(RuntimeBase):
     def _r(self):
         r = rt.Runtime(tick_seconds=9999)
@@ -420,6 +480,7 @@ class ConfigImportExportTest(RuntimeBase):
         cfg = out["config"]
         self.assertNotIn("screen", cfg)
         self.assertNotIn("autostart", cfg)
+        self.assertNotIn("close_action", cfg)
         self.assertNotIn("last_run", cfg["update"])
         self.assertIn("screen", out["machine"])            # 本机项另存
         self.assertEqual(cfg["desktop"]["interval"], 15)
@@ -558,6 +619,78 @@ class ConfigImportExportTest(RuntimeBase):
         r = rt.Runtime(tick_seconds=9999)
         r.import_config({"use_custom": True})
         self.assertIn("导入", r.state()["status"])
+
+
+class CloseActionTest(RuntimeBase):
+    """前端窗口关闭行为（config.close_action）：本机偏好，不随设置文件迁移。"""
+
+    def test_default_is_ask_every_time(self):
+        self.assertIsNone(rt.Runtime(tick_seconds=9999).config().get("close_action"))
+
+    def test_set_persists_and_reloads(self):
+        r = rt.Runtime(tick_seconds=9999)
+        ok, errors = r.set_close_action("tray")
+        self.assertTrue(ok, errors)
+        self.assertEqual(r.config()["close_action"], "tray")
+        saved = json.loads(self.cfg_path.read_text("utf-8"))
+        self.assertEqual(saved["close_action"], "tray")
+        # 重新加载仍生效（跨进程重启保留）
+        self.assertEqual(rt.Runtime(tick_seconds=9999).config()["close_action"], "tray")
+
+    def test_set_accepts_exit_and_none(self):
+        r = rt.Runtime(tick_seconds=9999)
+        self.assertTrue(r.set_close_action("exit")[0])
+        self.assertEqual(r.config()["close_action"], "exit")
+        self.assertTrue(r.set_close_action(None)[0])
+        self.assertIsNone(r.config()["close_action"])
+
+    def test_set_rejects_unknown_value(self):
+        r = rt.Runtime(tick_seconds=9999)
+        ok, errors = r.set_close_action("whatever")
+        self.assertFalse(ok)
+        self.assertTrue(errors)
+        self.assertIsNone(r.config().get("close_action"))
+
+    def test_save_failure_keeps_memory_unchanged(self):
+        r = rt.Runtime(tick_seconds=9999)
+        with mock.patch.object(core, "config_save", side_effect=OSError("boom")):
+            ok, errors = r.set_close_action("exit")
+        self.assertFalse(ok)
+        self.assertTrue(errors)
+        self.assertIsNone(r.config().get("close_action"))
+
+    def test_not_exported_and_ignored_on_import(self):
+        r = rt.Runtime(tick_seconds=9999)
+        r.set_close_action("tray")
+        self.assertNotIn("close_action", r.export_config()["config"])
+        ok, errors, warnings, _applied = r.import_config({"close_action": "exit"})
+        self.assertTrue(ok, errors)
+        self.assertTrue(any("close_action" in w for w in warnings))
+        self.assertEqual(r.config()["close_action"], "tray")   # 本机项不被导入覆盖
+
+
+class ClosePromptTest(RuntimeBase):
+    """关闭确认请求经状态推送投递：宿主不需要向页面注入脚本。"""
+
+    def test_prompt_flag_is_delivered_once(self):
+        r = rt.Runtime(tick_seconds=9999)
+        self.assertFalse(r.state()["close_prompt"])     # 默认无请求
+        r.request_close_prompt()
+        self.assertTrue(r.state()["close_prompt"])      # 送达一次
+        self.assertFalse(r.state()["close_prompt"])     # 读到即消费，不会反复弹框
+
+    def test_prompt_wakes_pending_long_poll(self):
+        """请求弹框要让挂起中的长轮询立刻返回，否则窗口关闭后会等满超时。"""
+        r = rt.Runtime(tick_seconds=9999)
+        rev = r.state()["rev"]
+        out = {}
+        t = threading.Thread(target=lambda: out.update(r.wait_state(rev, 25)))
+        t.start()
+        time.sleep(0.3)
+        r.request_close_prompt()
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "长轮询没有被唤醒")
+        self.assertTrue(out.get("close_prompt"))
 
 
 if __name__ == "__main__":

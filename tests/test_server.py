@@ -64,13 +64,13 @@ class ServerTest(unittest.TestCase):
     # ------------------------------------------------------------- helpers
 
     def req(self, method, path, body=None, token=True, host=None, origin=None,
-            ctype="application/json", raw=None, timeout=5):
-        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+            ctype="application/json", raw=None, timeout=5, port=None, tok=None):
+        conn = http.client.HTTPConnection("127.0.0.1", port or self.port, timeout=timeout)
         headers = {}
         if host:
             headers["Host"] = host
         if token:
-            headers[sv.TOKEN_HEADER] = self.token
+            headers[sv.TOKEN_HEADER] = tok or self.token
         if origin:
             headers["Origin"] = origin
         data = raw if raw is not None else (
@@ -90,6 +90,8 @@ class ServerTest(unittest.TestCase):
         status, body = self.req("GET", "/api/identity", token=False)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["app"], "pjsk-wallpaper")
+        # 身份应答不得泄露令牌（令牌只写在 runtime/server.json 里）
+        self.assertNotIn(self.token.encode(), body)
 
     def test_state_requires_token(self):
         status, _ = self.req("GET", "/api/state", token=False)
@@ -257,6 +259,78 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(self.token.encode(), body)
         self.assertNotIn(b"__PJSK_TOKEN__", body)
+
+    def test_window_show_needs_token(self):
+        status, _ = self.req("POST", "/api/window/show", token=False)
+        self.assertEqual(status, 403)
+
+    def test_window_endpoints_without_ui_report_unsupported(self):
+        """没有前端窗口的实例（无 UI / 测试环境）如实返回不支持，而不是假装成功。"""
+        for path in ("/api/window/show", "/api/window/close"):
+            status, body = self.req("POST", path, body={"action": "tray"})
+            self.assertEqual(status, 501)
+            self.assertFalse(json.loads(body)["ok"])
+
+    def test_window_show_calls_launcher_hook(self):
+        class FakeUi:
+            def __init__(self):
+                self.shown = []
+
+            def show_window(self):
+                self.shown.append(1)
+
+            def close_window(self, action, remember):
+                return {"ok": False, "error": "unused"}
+
+        ui = FakeUi()
+        srv = sv.WallpaperServer(self.rt, port=18960, ui=ui)
+        srv.bind()
+        srv.start_background()
+        self.addCleanup(srv.shutdown)
+        # 另一个实例的令牌无效：只有本实例的令牌能唤起本实例的窗口
+        status, _ = self.req("POST", "/api/window/show", port=srv.port)
+        self.assertEqual(status, 403)
+        status, body = self.req("POST", "/api/window/show", port=srv.port,
+                                tok=srv.token)
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["ok"])
+        self.assertEqual(ui.shown, [1])
+
+    def test_window_close_forwards_decision_to_launcher(self):
+        class FakeUi:
+            def __init__(self):
+                self.calls = []
+
+            def show_window(self):
+                pass
+
+            def close_window(self, action, remember):
+                self.calls.append((action, remember))
+                if action not in ("exit", "tray"):
+                    return {"ok": False, "error": "无效的关闭操作"}
+                return {"ok": True, "action": action, "saved": remember}
+
+        ui = FakeUi()
+        srv = sv.WallpaperServer(self.rt, port=18970, ui=ui)
+        srv.bind()
+        srv.start_background()
+        self.addCleanup(srv.shutdown)
+
+        status, _ = self.req("POST", "/api/window/close", port=srv.port,
+                             token=False, body={"action": "tray", "remember": True})
+        self.assertEqual(status, 403)   # 仍需令牌
+        self.assertEqual(ui.calls, [])
+
+        status, body = self.req("POST", "/api/window/close", port=srv.port,
+                                tok=srv.token, body={"action": "tray", "remember": True})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True, "action": "tray", "saved": True})
+        self.assertEqual(ui.calls, [("tray", True)])
+
+        status, body = self.req("POST", "/api/window/close", port=srv.port,
+                                tok=srv.token, body={"action": "nope"})
+        self.assertEqual(status, 400)
+        self.assertFalse(json.loads(body)["ok"])
 
     def test_config_export_requires_token(self):
         status, _ = self.req("GET", "/api/config/export", token=False)
