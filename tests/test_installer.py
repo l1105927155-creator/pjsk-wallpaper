@@ -387,8 +387,9 @@ class InstallPreservesUserDataTest(unittest.TestCase):
                                          _install_done=lambda: None,
                                          _fatal=lambda msg=None: None,
                                          _instance_reappeared=lambda: None,
-                                         _backup_program_files=lambda d: inst.Wizard._backup_program_files(fake, d),
-                                         _restore_program_files=lambda b, d: inst.Wizard._restore_program_files(fake, b, d))
+                                         _backup_program_files=lambda d, b: inst.Wizard._backup_program_files(fake, d, b),
+                                         _rollback_program_files=lambda b, e, d: inst.Wizard._rollback_program_files(fake, b, e, d),
+                                         _program_files=lambda d: inst.Wizard._program_files(d))
             with mock.patch.object(inst, "SRC", src), \
                     mock.patch.object(inst, "INSTALL_FILES",
                                       ["launcher.pyw", "core.py"]), \
@@ -443,17 +444,27 @@ class InstallSafetyTest(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
 
     def _make(self):
-        """源目录（新版本）与目标目录（旧版本 + 用户数据）。"""
+        """源目录（新版本）与目标目录（旧版本 + 用户数据）。
+
+        app/ 里各有对方没有的静态资源，用来验证「只删本次新增、保留原有」。
+        """
         src, dest = self.td / "src", self.td / "dest"
         (src / "app").mkdir(parents=True)
         (src / "app" / "index.html").write_text("new-index", "utf-8")
+        (src / "app" / "new-asset.css").write_text("new-asset", "utf-8")
         (src / "launcher.pyw").write_text("new-launcher", "utf-8")
         (src / "core.py").write_text("new-core", "utf-8")
         dest.mkdir()
         (dest / "launcher.pyw").write_text("old-launcher", "utf-8")
+        (dest / "core.py").write_text("old-core", "utf-8")
         (dest / "app").mkdir()
         (dest / "app" / "index.html").write_text("old-index", "utf-8")
+        (dest / "app" / "old-asset.css").write_text("old-asset", "utf-8")
         (dest / "config.json").write_text('{"user": 1}', "utf-8")
+        (dest / "library" / "custom").mkdir(parents=True)
+        (dest / "library" / "custom" / "mine.png").write_bytes(b"img")
+        (dest / "runtime").mkdir()
+        (dest / "runtime" / "server.json").write_text("{}", "utf-8")
         return src, dest
 
     def _fake(self):
@@ -471,8 +482,9 @@ class InstallSafetyTest(unittest.TestCase):
         # 绑定真实的收尾方法（弹窗已由 _drain 打桩），只替换 destroy
         fake._fatal = lambda msg=None: inst.Wizard._fatal(fake, msg)
         fake._instance_reappeared = lambda: inst.Wizard._instance_reappeared(fake)
-        fake._backup_program_files = lambda d: inst.Wizard._backup_program_files(fake, d)
-        fake._restore_program_files = lambda b, d: inst.Wizard._restore_program_files(fake, b, d)
+        fake._backup_program_files = lambda d, b: inst.Wizard._backup_program_files(fake, d, b)
+        fake._rollback_program_files = lambda b, e, d: inst.Wizard._rollback_program_files(fake, b, e, d)
+        fake._program_files = lambda d: inst.Wizard._program_files(d)
         return fake, steps, scheduled, destroyed
 
     def _drain(self, scheduled):
@@ -503,16 +515,65 @@ class InstallSafetyTest(unittest.TestCase):
         self.assertTrue(destroyed, "应中止安装流程")
         self.assertTrue(any("重新启动" in s for s in shown), shown)
 
-    def test_restores_original_files_when_copy_fails(self):
-        """复制中途 I/O 失败：把备份的原程序文件放回去，不留混合版本。"""
+    def test_failure_after_real_overwrite_restores_and_removes_added(self):
+        """已确实覆盖过旧文件、且已新增文件之后才失败：旧内容还原、新增文件清除。
+
+        故障注入点只落在**覆盖阶段**（目标目录内的 copytree）：此时 launcher.pyw /
+        core.py 已被新版本覆盖、app/new-asset.css 已由本次升级落地。注入点若提前到
+        备份阶段，就无法证明「部分覆盖后的回滚」，所以这里还会断言失败那一刻旧文件
+        确实已经被覆盖。
+        """
+        src, dest = self._make()
+        fake, steps, scheduled, destroyed = self._fake()
+        real_copytree = shutil.copytree
+        seen = {"fired": False}
+
+        def partial_copytree(s_, d_, *a, **k):
+            if str(d_).startswith(str(dest)) and not seen["fired"]:
+                seen["fired"] = True
+                seen["core_at_failure"] = (dest / "core.py").read_text("utf-8")
+                Path(d_).mkdir(parents=True, exist_ok=True)
+                (Path(d_) / "new-asset.css").write_text("new-asset", "utf-8")
+                raise OSError("disk full")
+            return real_copytree(s_, d_, *a, **k)
+
+        with mock.patch.object(inst, "SRC", src), \
+                mock.patch.object(inst, "INSTALL_FILES",
+                                  ["launcher.pyw", "core.py"]), \
+                mock.patch.object(inst, "INSTALL_DIRS", ["app"]), \
+                mock.patch.object(inst, "running_instance_in", lambda d: None), \
+                mock.patch.object(inst.shutil, "copytree", partial_copytree):
+            inst.Wizard._install(fake, dest)
+        self.assertTrue(seen["fired"], "故障必须落在覆盖阶段")
+        self.assertEqual(seen["core_at_failure"], "new-core",
+                         "失败时旧文件应已被新版本覆盖，否则验证不到部分覆盖后的回滚")
+        # 被覆盖的旧文件已还原
+        self.assertEqual((dest / "launcher.pyw").read_text("utf-8"), "old-launcher")
+        self.assertEqual((dest / "core.py").read_text("utf-8"), "old-core")
+        self.assertEqual((dest / "app" / "index.html").read_text("utf-8"), "old-index")
+        # 原有静态资源保留，本次新增的静态资源被清除
+        self.assertEqual((dest / "app" / "old-asset.css").read_text("utf-8"), "old-asset")
+        self.assertFalse((dest / "app" / "new-asset.css").exists(),
+                         "本次新增的静态资源应被清除")
+        # 用户与运行时数据不受影响
+        self.assertEqual((dest / "config.json").read_text("utf-8"), '{"user": 1}')
+        self.assertTrue((dest / "library" / "custom" / "mine.png").is_file())
+        self.assertEqual((dest / "runtime" / "server.json").read_text("utf-8"), "{}")
+        shown = self._drain(scheduled)
+        self.assertTrue(any("安装失败" in s and "disk full" in s for s in shown), shown)
+        self.assertFalse(any("恢复原程序文件未完成" in s for s in shown),
+                         "完整回滚不应报告残留风险")
+
+    def test_backup_failure_leaves_target_untouched(self):
+        """备份阶段失败：目标程序目录完全不被修改，且不残留临时目录。"""
         src, dest = self._make()
         fake, steps, scheduled, destroyed = self._fake()
         real_copy2 = shutil.copy2
-        calls = {"n": 0}
+        tmp_root = Path(tempfile.gettempdir())
+        before = set(tmp_root.glob("pjsk-install-backup-*"))
 
         def flaky_copy2(s_, d_, *a, **k):
-            calls["n"] += 1
-            if calls["n"] >= 2:
+            if "pjsk-install-backup-" in str(d_):       # 只让备份写入失败
                 raise OSError("disk full")
             return real_copy2(s_, d_, *a, **k)
 
@@ -524,35 +585,44 @@ class InstallSafetyTest(unittest.TestCase):
                 mock.patch.object(inst.shutil, "copy2", flaky_copy2):
             inst.Wizard._install(fake, dest)
         self.assertEqual((dest / "launcher.pyw").read_text("utf-8"), "old-launcher")
+        self.assertEqual((dest / "core.py").read_text("utf-8"), "old-core")
         self.assertEqual((dest / "app" / "index.html").read_text("utf-8"), "old-index")
-        self.assertFalse((dest / "core.py").exists(), "失败前未写入的文件不应出现")
-        self.assertEqual((dest / "config.json").read_text("utf-8"), '{"user": 1}')
+        self.assertEqual((dest / "app" / "old-asset.css").read_text("utf-8"), "old-asset")
+        self.assertFalse((dest / "app" / "new-asset.css").exists())
+        self.assertFalse(any("正在恢复" in s for s in steps),
+                         "备份失败时尚未覆盖任何文件，不应进入恢复流程")
+        self.assertEqual(set(tmp_root.glob("pjsk-install-backup-*")), before,
+                         "临时备份目录应被清理")
         shown = self._drain(scheduled)
-        self.assertTrue(any("安装失败" in s and "disk full" in s for s in shown), shown)
+        self.assertTrue(any("disk full" in s for s in shown), shown)
 
-    def test_reports_mixed_state_when_restore_also_fails(self):
-        """复制失败且恢复也不完整：必须明确提示，不能让用户以为升级成功。"""
+    def test_reports_incomplete_rollback(self):
+        """回滚也不完整：必须明确报告残留风险，不能报成完整回滚。"""
         src, dest = self._make()
         fake, steps, scheduled, destroyed = self._fake()
-        real_copy2 = shutil.copy2
+        real_copytree = shutil.copytree
+        seen = {"fired": False}
 
-        def flaky_copy2(s_, d_, *a, **k):
-            if str(d_).startswith(str(dest)):
+        def failing_copytree(s_, d_, *a, **k):
+            if str(d_).startswith(str(dest)) and not seen["fired"]:
+                seen["fired"] = True
                 raise OSError("disk full")
-            return real_copy2(s_, d_, *a, **k)
+            return real_copytree(s_, d_, *a, **k)
 
         with mock.patch.object(inst, "SRC", src), \
                 mock.patch.object(inst, "INSTALL_FILES",
                                   ["launcher.pyw", "core.py"]), \
                 mock.patch.object(inst, "INSTALL_DIRS", ["app"]), \
                 mock.patch.object(inst, "running_instance_in", lambda d: None), \
-                mock.patch.object(inst.shutil, "copy2", flaky_copy2), \
-                mock.patch.object(inst.Wizard, "_restore_program_files",
-                                  lambda self_, b, d: ["launcher.pyw（boom）"]):
+                mock.patch.object(inst.shutil, "copytree", failing_copytree), \
+                mock.patch.object(inst.Wizard, "_rollback_program_files",
+                                  lambda self_, b, e, d: ["删除本次新增的 app/new-asset.css（boom）"]):
             inst.Wizard._install(fake, dest)
+        self.assertTrue(seen["fired"], "故障必须落在覆盖阶段")
         self.assertFalse(fake._result_ok)
         shown = self._drain(scheduled)
-        self.assertTrue(any("新旧混合" in s and "disk full" in s for s in shown), shown)
+        self.assertTrue(any("恢复原程序文件未完成" in s and "disk full" in s
+                            for s in shown), shown)
 
 
 if __name__ == "__main__":

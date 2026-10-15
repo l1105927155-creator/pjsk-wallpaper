@@ -284,27 +284,31 @@ class Wizard(tk.Tk):
                 return
 
             self._step("正在复制文件...")
-            backup = self._backup_program_files(dest)
+            backup = Path(tempfile.mkdtemp(prefix="pjsk-install-backup-"))
             try:
-                for name in INSTALL_FILES:
-                    src = SRC / name
-                    if src.exists():
-                        shutil.copy2(src, dest / name)
-                for name in INSTALL_DIRS:
-                    src = SRC / name
-                    if src.is_dir():
-                        shutil.copytree(src, dest / name, dirs_exist_ok=True)
-            except Exception as copy_err:
-                # 复制中途失败：把备份的原程序文件放回去，尽量不留混合版本
-                self._step("正在恢复原程序文件...")
-                failed = self._restore_program_files(backup, dest)
-                if failed:
-                    raise RuntimeError(
-                        f"复制失败（{copy_err}），且恢复原程序文件未完成："
-                        f"{'；'.join(failed)}。程序文件可能处于新旧混合状态，"
-                        "请重新运行安装向导修复。") from copy_err
-                self._step("已恢复原程序文件。")
-                raise
+                # 备份先于覆盖：备份失败时目标目录一个字节都没动
+                existed = self._backup_program_files(dest, backup)
+                try:
+                    for name in INSTALL_FILES:
+                        src = SRC / name
+                        if src.exists():
+                            shutil.copy2(src, dest / name)
+                    for name in INSTALL_DIRS:
+                        src = SRC / name
+                        if src.is_dir():
+                            shutil.copytree(src, dest / name, dirs_exist_ok=True)
+                except Exception as copy_err:
+                    # 复制中途失败：还原旧文件，并清掉本次升级新增的程序文件，
+                    # 尽量不留新旧混合版本
+                    self._step("正在恢复原程序文件...")
+                    failed = self._rollback_program_files(backup, existed, dest)
+                    if failed:
+                        raise RuntimeError(
+                            f"复制失败（{copy_err}），且恢复原程序文件未完成："
+                            f"{'；'.join(failed)}。程序文件可能处于新旧混合状态，"
+                            "请重新运行安装向导修复。") from copy_err
+                    self._step("已恢复原程序文件。")
+                    raise
             finally:
                 shutil.rmtree(backup, ignore_errors=True)
 
@@ -335,13 +339,32 @@ class Wizard(tk.Tk):
             self.after(0, lambda: self._fatal(msg))
         self.after(0, self._install_done)
 
-    def _backup_program_files(self, dest: Path) -> Path:
-        """覆盖前把将被替换/删除的程序文件备份到临时目录，供失败时还原。
+    @staticmethod
+    def _program_files(dest: Path) -> set:
+        """安装清单范围内的程序文件相对路径集合。
 
-        只备份程序文件（INSTALL_FILES / INSTALL_DIRS / LEGACY_FILES），
-        config.json、library/、cache/、logs/ 等用户数据不碰也不备份。
+        只含 INSTALL_FILES / LEGACY_FILES 与 INSTALL_DIRS（app/）——用户数据
+        （config.json、library/、cache/、logs/）与 runtime/ 不在清单里，
+        因此回滚不会删除或重置它们。
         """
-        backup = Path(tempfile.mkdtemp(prefix="pjsk-install-backup-"))
+        out = set()
+        for name in INSTALL_FILES + LEGACY_FILES:
+            if (dest / name).is_file():
+                out.add(name)
+        for name in INSTALL_DIRS:
+            d = dest / name
+            if d.is_dir():
+                for p in d.rglob("*"):
+                    if p.is_file():
+                        out.add(p.relative_to(dest).as_posix())
+        return out
+
+    def _backup_program_files(self, dest: Path, backup: Path) -> set:
+        """把将被替换/删除的程序文件备份进 backup，返回升级前已存在的清单。
+
+        备份完成后才开始覆盖；备份失败会直接抛出，目标目录保持原样。
+        """
+        existed = self._program_files(dest)
         for name in INSTALL_FILES + LEGACY_FILES:
             src = dest / name
             if src.is_file():
@@ -350,11 +373,22 @@ class Wizard(tk.Tk):
             src = dest / name
             if src.is_dir():
                 shutil.copytree(src, backup / name, dirs_exist_ok=True)
-        return backup
+        return existed
 
-    def _restore_program_files(self, backup: Path, dest: Path) -> list:
-        """把备份的程序文件放回目标目录；返回未能恢复的条目（不抛异常）。"""
+    def _rollback_program_files(self, backup: Path, existed: set, dest: Path) -> list:
+        """回滚程序文件：还原本来的内容，并删除仅由本次升级新增的程序文件。
+
+        范围严格限定在安装清单与 INSTALL_DIRS（app/）之内：先删掉升级新加的
+        文件，再把备份内容放回去。返回未能完成的条目（不抛异常）。
+        """
         failed = []
+        for rel in sorted(self._program_files(dest) - existed):
+            try:
+                (dest / rel).unlink()
+            except OSError as e:
+                failed.append(f"删除本次新增的 {rel}（{e}）")
+        if not backup.is_dir():
+            return failed
         dest.mkdir(parents=True, exist_ok=True)
         for name in INSTALL_FILES + LEGACY_FILES:
             src = backup / name
@@ -363,7 +397,7 @@ class Wizard(tk.Tk):
             try:
                 shutil.copy2(src, dest / name)
             except OSError as e:
-                failed.append(f"{name}（{e}）")
+                failed.append(f"恢复 {name}（{e}）")
         for name in INSTALL_DIRS:
             src = backup / name
             if not src.is_dir():
@@ -371,7 +405,7 @@ class Wizard(tk.Tk):
             try:
                 shutil.copytree(src, dest / name, dirs_exist_ok=True)
             except OSError as e:
-                failed.append(f"{name}/（{e}）")
+                failed.append(f"恢复 {name}/（{e}）")
         return failed
 
     def _instance_reappeared(self):
