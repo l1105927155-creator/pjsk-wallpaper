@@ -282,5 +282,105 @@ class WindowHostTest(unittest.TestCase):
             self.assertFalse(launcher.request_show_window({"port": 1, "token": "t"}))
 
 
+class _FakeEvent:
+    """支持 `events.closing += handler` 的最小替身。"""
+
+    def __init__(self):
+        self.handlers = []
+
+    def __iadd__(self, fn):
+        self.handlers.append(fn)
+        return self
+
+
+class _FakeWindow:
+    def __init__(self):
+        self.destroyed = False
+        self.events = type("Events", (), {})()
+        for name in ("closing", "minimized", "loaded", "closed", "shown"):
+            setattr(self.events, name, _FakeEvent())
+
+    def destroy(self):
+        self.destroyed = True
+
+
+class _FakeWebview:
+    """替身：记录 create_window/start 调用，可注入启动阶段异常。"""
+
+    def __init__(self, create_error=None, start_error=None):
+        self.create_error = create_error
+        self.start_error = start_error
+        self.started = False
+        self.window = None
+
+    def create_window(self, *args, **kwargs):
+        if self.create_error:
+            raise self.create_error
+        self.window = _FakeWindow()
+        return self.window
+
+    def start(self, **kwargs):
+        if self.start_error:
+            raise self.start_error
+        self.started = True
+
+
+class RunUiFallbackTest(unittest.TestCase):
+    """整改 P2：WebView 启动阶段异常必须走统一回退，不留半创建的宿主引用。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.td = Path(self._tmp.name)
+        (self.td / "library" / "pjsk").mkdir(parents=True)
+        (self.td / "library" / "custom").mkdir(parents=True)
+        self.addCleanup(self._tmp.cleanup)
+        self._ps = [
+            mock.patch.object(core, "CONFIG_PATH", self.td / "config.json"),
+            mock.patch.object(core, "PJSK_DIR", self.td / "library" / "pjsk"),
+            mock.patch.object(core, "CUSTOM_DIR", self.td / "library" / "custom"),
+            mock.patch.object(core, "detect_screen", lambda: [800, 600]),
+        ]
+        for p in self._ps:
+            p.start()
+            self.addCleanup(p.stop)
+        self.l = launcher.Launcher()
+        self.l.port = 18999
+        self.opened = []
+        self.fatal = mock.patch.object(launcher, "open_app_window",
+                                       lambda port: self.opened.append(port))
+        self.fatal.start()
+        self.addCleanup(self.fatal.stop)
+
+    def _run(self, fake):
+        with mock.patch.dict(sys.modules, {"webview": fake}):
+            return self.l._run_ui()
+
+    def test_normal_start_keeps_host(self):
+        fake = _FakeWebview()
+        self.assertTrue(self._run(fake))
+        self.assertTrue(fake.started)
+        self.assertIsNotNone(self.l.host)
+        self.assertEqual(self.opened, [])            # 不开浏览器窗口
+
+    def test_falls_back_when_webview_unavailable(self):
+        self.assertFalse(self._run(None))            # sys.modules 置 None = 导入失败
+        self.assertIsNone(self.l.host)
+        self.assertEqual(self.opened, [18999])
+
+    def test_falls_back_when_create_window_raises(self):
+        fake = _FakeWebview(create_error=RuntimeError("no webview2"))
+        self.assertFalse(self._run(fake))
+        self.assertIsNone(self.l.host)
+        self.assertFalse(fake.started)
+        self.assertEqual(self.opened, [18999])
+
+    def test_falls_back_and_cleans_window_when_start_raises(self):
+        fake = _FakeWebview(start_error=RuntimeError("gui init failed"))
+        self.assertFalse(self._run(fake))
+        self.assertTrue(fake.window.destroyed, "半创建的窗口应被清理")
+        self.assertIsNone(self.l.host, "不得留下假装有可控窗口的宿主引用")
+        self.assertEqual(self.opened, [18999])
+
+
 if __name__ == "__main__":
     unittest.main()

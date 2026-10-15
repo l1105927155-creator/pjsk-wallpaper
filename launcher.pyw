@@ -253,21 +253,32 @@ class Launcher:
             self._stop.wait()
 
     def _run_ui(self) -> bool:
-        """承载前端窗口并运行 GUI 主循环；返回 False 表示已退回浏览器窗口。"""
+        """承载前端窗口并运行 GUI 主循环；返回 False 表示已退回浏览器窗口。
+
+        模块不可用、create_window 失败、GUI 主循环启动失败都走同一条回退：
+        尝试清掉半创建的窗口、丢掉宿主引用（不留「假装有可控窗口」的状态）、
+        打开浏览器窗口；托盘/HTTP 服务/调度线程/更新子进程继续运行，仍由
+        托盘「退出」统一收尾，不会出现半启动无人管理的状态。
+        """
         try:
             import webview
         except Exception:
             open_app_window(self.port)
             return False
-        self.host = WindowHost(self.rt, self.port)
         try:
+            self.host = WindowHost(self.rt, self.port)
             self.host.create(webview)
+            icon = core.APP_DIR / "icon.ico"
+            webview.start(icon=str(icon) if icon.is_file() else None)
         except Exception:
+            if self.host is not None and self.host.window is not None:
+                try:
+                    self.host.window.destroy()
+                except Exception:
+                    pass
             self.host = None
             open_app_window(self.port)
             return False
-        icon = core.APP_DIR / "icon.ico"
-        webview.start(icon=str(icon) if icon.is_file() else None)
         return True
 
     def _on_tray(self, action):
