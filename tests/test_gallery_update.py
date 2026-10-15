@@ -20,6 +20,17 @@ import gallery_update as gu  # noqa: E402
 import runtime as rt  # noqa: E402
 
 
+class SourceBaseTest(unittest.TestCase):
+    """界面提示用的卡面图源地址：按地区给出，未知地区按 jp 兜底。"""
+
+    def test_source_base_by_region(self):
+        for region in ("jp", "cn", "en", "kr", "tw"):
+            base = gu.source_base(region)
+            self.assertTrue(base.startswith("https://"), base)
+            self.assertEqual(base, gu.REGIONS[region]["assets"])
+        self.assertEqual(gu.source_base("不存在"), gu.REGIONS["jp"]["assets"])
+
+
 class ProgressMarkerTest(unittest.TestCase):
     """进度标记是 gallery_update → runtime 的跨进程契约，两处必须一致。"""
 

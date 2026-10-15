@@ -73,6 +73,32 @@
     el.classList.remove("hidden");
   }
 
+  // 项目地址：内嵌窗口里非输入元素默认不可选中，所以必须点一下就能复制。
+  // 优先用剪贴板 API；不可用时退回「临时文本框 + execCommand」。
+  var REPO_URL = "https://github.com/l1105927155-creator/pjsk-wallpaper";
+
+  function copyText(text, okMsg) {
+    function fallback() {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      toast(ok ? okMsg : "复制失败，请手动输入地址", ok ? "ok" : "err");
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        function () { toast(okMsg, "ok"); }, fallback);
+    } else {
+      fallback();
+    }
+  }
+
   function setInput(el, value) {
     if (!el || document.activeElement === el) { return; }
     if (String(el.value) !== String(value)) { el.value = value; }
@@ -196,6 +222,10 @@
 
     // 更新状态
     var u = s.update;
+    // 更新图源地址由后端给出（地区到地址的映射以后端为准，前端不重复维护）
+    $("updateSourceHint").textContent = u.source
+      ? ("更新将从 " + u.source + " 拉取卡面，需保持网络通畅")
+      : "更新将从卡面图源拉取，需保持网络通畅";
     $("upState").textContent = u.running
       ? ("更新中…" + updateProgressSuffix(u)) : (u.message || "空闲");
     $("upLast").textContent = fmtTime(u.last_run);
@@ -586,6 +616,9 @@
     $("btnUpdate").addEventListener("click", function () { doUpdate(this); });
     $("btnUpdate2").addEventListener("click", function () { doUpdate(this); });
     $("btnLog").addEventListener("click", loadLog);
+    $("btnCopyRepo").addEventListener("click", function () {
+      copyText(REPO_URL, "已复制项目地址");
+    });
     $("logClose").addEventListener("click", function () {
       $("logModal").classList.add("hidden");
     });

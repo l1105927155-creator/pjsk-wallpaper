@@ -57,6 +57,11 @@ CACHE_TTL = 24 * 3600
 LOG = core.APP_DIR / "logs" / "update.log"
 
 
+def source_base(region: str) -> str:
+    """该地区的卡面下载地址前缀（界面提示用；未知地区按 jp 处理）。"""
+    return REGIONS.get(region, REGIONS["jp"])["assets"]
+
+
 def log(msg: str):
     line = f"{datetime.now():%Y-%m-%d %H:%M:%S}  {msg}"
     print(line, flush=True)

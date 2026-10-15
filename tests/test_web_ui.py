@@ -71,13 +71,38 @@ class WebUiTest(unittest.TestCase):
         self.assertEqual(self.html.count("__PJSK_TOKEN__"), 1)
 
     def test_no_external_resources(self):
-        """离线可用：不得引用外部 CDN/字体/图片。"""
+        """离线可用：不得引用外部 CDN/字体/图片（项目地址只是可复制的文本，不是资源）。"""
+        allowed = ("https://github.com/",)
         for name, text in (("index.html", self.html), ("app.js", self.js),
                            ("styles.css", self.css)):
             for m in re.findall(r'https?://[^\s"\'\)]+', text):
+                if m.startswith(allowed):
+                    continue
                 self.fail(f"{name} 含外部资源引用: {m}")
             self.assertNotIn("//cdn", text)
             self.assertNotIn("@import", text)
+
+    def test_about_card_and_update_hint(self):
+        """关于页只留可复制的项目地址；更新提示的图源地址由后端给出。"""
+        self.assertIn('id="btnCopyRepo"', self.html)
+        self.assertIn("REPO_URL", self.js)
+        self.assertIn('$("btnCopyRepo").addEventListener("click"', self.js)
+        self.assertIn("navigator.clipboard.writeText", self.js)
+        # 提示里的地址来自后端状态，前端不重复维护地区→地址映射
+        self.assertIn('id="updateSourceHint"', self.html)
+        self.assertIn('$("updateSourceHint").textContent', self.js)
+        self.assertIn("拉取卡面，需保持网络通畅", self.js)
+        self.assertNotIn("storage.sekai.best", self.js)
+
+    def test_redundant_copy_stays_removed(self):
+        """已按要求删掉的冗余文案不得回归。"""
+        for gone in ("本机壁纸控制台", "更新会联网拉取卡面", "桌面与锁屏各自启停",
+                     "两种来源都关闭时", "间隔更新仅在本程序运行时执行",
+                     "FIFO，下次更新生效", "pjsk 容量上限（"):
+            self.assertNotIn(gone, self.html, gone)
+        for need in ("桌面间隔（分钟，1-1440）", "锁屏间隔（分钟，1-1440）",
+                     "pjsk 容量上限"):
+            self.assertIn(need, self.html, need)
 
     def test_local_assets_referenced_exist(self):
         for m in re.findall(r'(?:href|src)="(assets/[^"]+)"', self.html):

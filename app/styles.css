@@ -182,6 +182,16 @@ main { padding-top: 18px; }
 }
 @keyframes spin { to { transform: rotate(360deg) } }
 
+/* 「关于」里的项目地址：看起来像代码块，点一下即复制 */
+.repo-url {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: var(--bg-soft); border: 1px solid var(--border);
+  color: var(--accent-line); border-radius: var(--radius-sm);
+  padding: 9px 11px; font-size: 12.5px; word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.repo-url:hover { border-color: var(--accent-line); }
+
 input[type="text"], input[type="number"], select {
   background: var(--bg-soft); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 8px 10px; min-width: 0;

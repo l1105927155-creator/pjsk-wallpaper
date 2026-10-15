@@ -23,6 +23,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import core
+import gallery_update
 
 TICK_SECONDS = 20          # 与旧版 tick 周期一致
 LOG_TAIL_LINES = 200
@@ -265,6 +266,8 @@ class Runtime:
                 "ok": self._update["ok"],
                 "message": self._update["message"],
                 "progress": dict(self._update["progress"] or {}) or None,
+                # 卡面图源地址：界面提示用，映射以后端为准（前端不重复维护）
+                "source": gallery_update.source_base(cfg["update"].get("region", "jp")),
                 "next": up_next if up_next else None,
                 "interval_enabled": bool(cfg["update"]["interval_enabled"]),
             },

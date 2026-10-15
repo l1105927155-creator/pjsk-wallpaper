@@ -15,6 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import core  # noqa: E402
+import gallery_update as gu  # noqa: E402
 import runtime as rt  # noqa: E402
 
 
@@ -395,6 +396,20 @@ class UpdateTest(RuntimeBase):
         self.assertGreater(r.update_status()["last_run"], 0)
         self.assertGreater(json.loads(self.cfg_path.read_text("utf-8"))
                            ["update"]["last_run"], 0)
+
+
+class UpdateSourceTest(RuntimeBase):
+    """界面提示用的卡面图源地址：映射以后端为准，换地区跟着变。"""
+
+    def test_state_exposes_update_source_for_region(self):
+        r = rt.Runtime(tick_seconds=9999)
+        src = r.state()["update"]["source"]
+        self.assertTrue(src.startswith("https://"), src)
+        self.assertEqual(src, gu.source_base(r.config()["update"]["region"]))
+        ok, errors, _w = r.apply_config({"update": {"region": "cn"}})
+        self.assertTrue(ok, errors)
+        self.assertNotEqual(r.state()["update"]["source"], src)
+        self.assertEqual(r.state()["update"]["source"], gu.source_base("cn"))
 
 
 class UpdateProgressTest(RuntimeBase):
