@@ -271,6 +271,17 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(status, 501)
             self.assertFalse(json.loads(body)["ok"])
 
+    def test_window_close_ack_clears_pending_prompt(self):
+        """确认清除：关闭确认是粘性待办，由前端确认后清除（整改 P1）。"""
+        self.rt.request_close_prompt()
+        self.assertTrue(self.rt.state()["close_prompt"])
+        status, _ = self.req("POST", "/api/window/close/ack", token=False)
+        self.assertEqual(status, 403)
+        status, body = self.req("POST", "/api/window/close/ack")
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["ok"])
+        self.assertFalse(self.rt.state()["close_prompt"])
+
     def test_window_show_calls_launcher_hook(self):
         class FakeUi:
             def __init__(self):

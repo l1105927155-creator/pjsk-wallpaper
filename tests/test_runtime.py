@@ -672,12 +672,29 @@ class CloseActionTest(RuntimeBase):
 class ClosePromptTest(RuntimeBase):
     """关闭确认请求经状态推送投递：宿主不需要向页面注入脚本。"""
 
-    def test_prompt_flag_is_delivered_once(self):
+    def test_prompt_is_sticky_until_acknowledged(self):
+        """整改：状态读取者不止内嵌页面一个，事件不能读一次就清零。
+
+        曾是「读到即消费」：并发状态请求（前端保存配置/更新时自己也会再发一次
+        /api/state）会抢先消费掉，真正要弹框的页面收不到。
+        """
         r = rt.Runtime(tick_seconds=9999)
         self.assertFalse(r.state()["close_prompt"])     # 默认无请求
         r.request_close_prompt()
-        self.assertTrue(r.state()["close_prompt"])      # 送达一次
-        self.assertFalse(r.state()["close_prompt"])     # 读到即消费，不会反复弹框
+        self.assertTrue(r.state()["close_prompt"])      # 第一个读者
+        self.assertTrue(r.state()["close_prompt"])      # 第二个读者仍能看到
+        self.assertTrue(r.wait_state(0, 0)["close_prompt"])  # 长轮询响应同样带标志
+        r.acknowledge_close_prompt()                    # 前端确认已弹框
+        self.assertFalse(r.state()["close_prompt"])
+
+    def test_prompt_can_be_requested_again_after_ack(self):
+        r = rt.Runtime(tick_seconds=9999)
+        r.request_close_prompt()
+        r.acknowledge_close_prompt()
+        r.request_close_prompt()                        # 用户再次点关闭
+        self.assertTrue(r.state()["close_prompt"])
+        r.acknowledge_close_prompt()
+        self.assertFalse(r.state()["close_prompt"])
 
     def test_prompt_wakes_pending_long_poll(self):
         """请求弹框要让挂起中的长轮询立刻返回，否则窗口关闭后会等满超时。"""

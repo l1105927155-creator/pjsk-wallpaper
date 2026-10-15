@@ -318,6 +318,11 @@ class _Handler(BaseHTTPRequestHandler):
             res = ui.close_window(payload.get("action"),
                                   bool(payload.get("remember")))
             self._send_json(res, 200 if res.get("ok") else 400)
+        elif path == "/api/window/close/ack":
+            # 前端确认已弹出关闭确认框：事件按「确认后清除」处理，
+            # 不依赖状态读取顺序，避免被无关读取者抢先消费。
+            self.rt.acknowledge_close_prompt()
+            self._send_json({"ok": True})
         else:
             self._error(404, "not found")
 

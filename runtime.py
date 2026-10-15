@@ -226,9 +226,10 @@ class Runtime:
                        if up.get("interval_enabled") else None)
             rev = self._rev
             pend = dict(self._pending)
-            # 关闭确认请求只投递一次：读到即视为已送达前端
+            # 关闭确认是粘性待办：读取（无论来自谁）不清除，由前端确认后清除。
+            # /api/state 的读取者不止内嵌页面一个，若读到就清零，无关请求或
+            # 并发竞态会抢先消费掉，真正要弹框的页面就收不到。
             close_prompt = self._close_prompt
-            self._close_prompt = False
         counts = core.library_counts()
         return {
             "server_time": now,
@@ -278,11 +279,18 @@ class Runtime:
         """请前端弹出「关闭窗口」确认框。
 
         走既有的状态推送通道：置标志并 +1 修订号，挂起中的长轮询立刻返回，
-        前端在收到状态时弹框。这样宿主无需向页面注入脚本求值。
+        前端在收到状态时弹框。标志保持待处理直到前端确认
+        （acknowledge_close_prompt），这样页面刷新、长轮询重连或并发状态请求
+        都不会让它无提示丢失；前端弹框是幂等的，重复收到只会聚焦已有弹框。
         """
         with self._lock:
             self._close_prompt = True
             self._bump()
+
+    def acknowledge_close_prompt(self):
+        """前端确认已弹出关闭确认框，清除待处理标志。"""
+        with self._lock:
+            self._close_prompt = False
 
     @staticmethod
     def _public_current(image_id):

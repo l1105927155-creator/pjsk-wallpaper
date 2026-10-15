@@ -142,9 +142,14 @@
       S = r.body;
       offset = (S.server_time || Date.now() / 1000) - Date.now() / 1000;
       render(S);
-      // 宿主在「用户点了关闭且未保存过选择」时经状态推送请求弹确认框；
-      // 不靠窗口直接向页面注入脚本，因此这条通道与页面刷新、长轮询一致可靠。
-      if (S.close_prompt) { promptClose(); }
+      // 宿主在「用户点了关闭且未保存过选择」时经状态推送请求弹确认框。
+      // 该标志是粘性待办（状态读取者不止本页一个，读到不清零）：
+      // 弹框后立即确认清除；弹框本身幂等，重复收到只会聚焦已有弹框。
+      if (S.close_prompt) {
+        promptClose();
+        api("/api/window/close/ack", { method: "POST", body: {} })
+          .catch(function () { /* 确认失败也没关系，下次状态仍会重提 */ });
+      }
       schedulePoll();
     }).catch(function () {
       if (mine !== pollSeq) { return; }
