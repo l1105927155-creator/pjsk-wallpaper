@@ -1,16 +1,19 @@
 /* pjsk 壁纸 · 控制台样式
-   深色卡面主题；原生 CSS（Grid/Flex + media queries），无外部 CDN、无第三方字体。 */
+   深色卡面主题，配色基调为青葱色（Miku #39c5bb）+ 渐变；原生 CSS
+   （Grid/Flex + media queries），无外部 CDN、无第三方字体。 */
 
 :root {
-  --bg: #0e1117;
-  --bg-soft: #131822;
-  --panel: #161b24;
-  --panel-2: #1b2130;
-  --border: #242c3a;
-  --border-soft: #1e2532;
-  --text: #e7eaf3;
-  --muted: #93a0b8;
-  --muted-2: #6c7a94;
+  --miku: #39c5bb;
+  --bg: #08191c;
+  --bg-rgb: 8, 25, 28;
+  --bg-soft: #0e2327;
+  --panel: #102a2e;
+  --panel-2: #153238;
+  --border: #1e464b;
+  --border-soft: #173a3f;
+  --text: #e4f1f0;
+  --muted: #8daeae;
+  --muted-2: #6a8a8c;
   --accent: #4c6fff;
   --accent-soft: rgba(76, 111, 255, .14);
   --accent-line: rgba(76, 111, 255, .45);
@@ -19,7 +22,7 @@
   --danger: #f2686c;
   --radius: 12px;
   --radius-sm: 8px;
-  --shadow: 0 8px 24px rgba(0, 0, 0, .35);
+  --shadow: 0 8px 24px rgba(2, 16, 18, .42);
   --gap: 16px;
   --font: "Microsoft YaHei UI", "Segoe UI", system-ui, -apple-system, sans-serif;
   /* 壁纸切换过渡时长：与 app.js 的 WALL_FADE_MS 必须一致。
@@ -32,12 +35,15 @@
 
 html, body { height: 100%; }
 
+/* 所有页面共用的底色：青葱色光晕 + 斜向渐变。
+   fixed 让底色在滚动时保持不动（各视图都挂在这层之上）。 */
 body {
   margin: 0;
   background:
-    radial-gradient(1100px 520px at 18% -12%, rgba(76, 111, 255, .16), transparent 62%),
-    radial-gradient(900px 460px at 100% 0%, rgba(255, 93, 143, .08), transparent 58%),
-    var(--bg);
+    radial-gradient(1200px 620px at 10% -12%, rgba(57, 197, 187, .26), transparent 62%),
+    radial-gradient(900px 520px at 100% 4%, rgba(57, 197, 187, .13), transparent 58%),
+    linear-gradient(168deg, #0b2a2c 0%, #08191c 46%, #061114 100%);
+  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font);
   font-size: 14px;
@@ -62,7 +68,7 @@ button, input, select { font-family: inherit; font-size: inherit; color: inherit
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: 16px;
   padding: 14px 0 12px;
-  background: linear-gradient(180deg, var(--bg) 70%, rgba(14, 17, 23, .85));
+  background: linear-gradient(180deg, var(--bg) 70%, rgba(var(--bg-rgb), .86));
   border-bottom: 1px solid var(--border-soft);
   flex-wrap: wrap;
 }
@@ -105,6 +111,9 @@ main { padding-top: 18px; }
 .cards { display: grid; gap: var(--gap); margin-bottom: var(--gap); }
 .cards.two { grid-template-columns: 1fr 1fr; }
 .cards.three { grid-template-columns: repeat(3, 1fr); }
+/* 不包在 .cards 里、直接挂在视图下的卡片（设置页的「图库更新」「关于」）
+   也要和上下块保持同样的间距，否则会与下一块贴在一起 */
+.view > .card { margin-bottom: var(--gap); }
 
 .card {
   background: var(--panel);
@@ -164,7 +173,7 @@ main { padding-top: 18px; }
   transition: background .15s, border-color .15s, transform .05s;
   white-space: nowrap;
 }
-.btn:hover:not(:disabled) { background: #232b3c; border-color: #33405a; }
+.btn:hover:not(:disabled) { background: #17393e; border-color: #2a5c62; }
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
@@ -209,13 +218,13 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px;
           user-select: none; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
 .switch .track {
-  width: 40px; height: 22px; border-radius: 999px; background: #2a3346;
+  width: 40px; height: 22px; border-radius: 999px; background: #1f4b50;
   border: 1px solid var(--border); position: relative; transition: background .18s;
   flex: none;
 }
 .switch .track::after {
   content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
-  border-radius: 50%; background: #c8d1e4; transition: transform .18s, background .18s;
+  border-radius: 50%; background: #d6eceb; transition: transform .18s, background .18s;
 }
 .switch input:checked + .track { background: var(--accent); border-color: var(--accent); }
 .switch input:checked + .track::after { transform: translateX(18px); background: #fff; }
@@ -250,7 +259,7 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px;
   border: 1px solid var(--border); color: var(--muted);
 }
 .thumb .nm { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 8px;
-             font-size: 11px; color: #dfe5f2; background: linear-gradient(transparent, rgba(8,10,16,.88));
+             font-size: 11px; color: #e4f1f0; background: linear-gradient(transparent, rgba(2, 16, 18, .88));
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .pager { display: flex; align-items: center; justify-content: center; gap: 12px;
@@ -270,10 +279,10 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px;
 .kv dd { margin: 0; }
 
 .log {
-  background: #0b0e14; border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: #081719; border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
   padding: 10px 12px; max-height: 240px; overflow: auto;
   font-family: Consolas, "Cascadia Mono", ui-monospace, monospace; font-size: 12px;
-  color: #c3cbdb; white-space: pre-wrap; word-break: break-all;
+  color: #c2dedd; white-space: pre-wrap; word-break: break-all;
 }
 
 .stat { display: flex; align-items: baseline; gap: 8px; }
