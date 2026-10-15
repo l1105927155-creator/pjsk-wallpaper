@@ -159,11 +159,12 @@ class WindowHostTest(unittest.TestCase):
 
     # ---------------- 显示 / 隐藏 ----------------
 
-    def test_show_restores_before_showing(self):
+    def test_show_shows_then_restores(self):
         host, _ = self._host()
         host.show_window()
-        # 必须先还原再显示，否则隐藏前若处于最小化会一直留在最小化状态
-        self.assertEqual(host.window.calls, ["restore", "show"])
+        # 顺序必须是 show → restore：restore 在隐藏状态下不生效（窗体仍处于最小化，
+        # 实测只剩任务栏图标、桌面不出窗口）；先 show 再 restore 才能真正还原几何。
+        self.assertEqual(host.window.calls, ["show", "restore"])
 
     def test_minimize_hides_to_tray(self):
         host, _ = self._host()

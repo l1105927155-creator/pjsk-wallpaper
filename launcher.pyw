@@ -130,11 +130,16 @@ class WindowHost:
     # ---------- 供托盘 / 页面调用 ----------
 
     def show_window(self):
-        """显示并置前（托盘左键、再次启动）。先还原再显示，避免停在最小化状态。"""
+        """从托盘/二次启动唤起前端窗口。
+
+        顺序必须是先 show 再 restore：restore 在隐藏状态下不生效（实测窗体仍处于
+        最小化，只剩任务栏图标、桌面上不出窗口），而 show 会把它置为可见但仍最小化，
+        随后 restore 才能真正还原到最小化前的位置与尺寸。
+        """
         if self.window is None:
             return
-        self.window.restore()
         self.window.show()
+        self.window.restore()
 
     def hide_to_tray(self):
         if self.window is not None:
