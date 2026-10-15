@@ -276,6 +276,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": ok, "errors": errors, "warnings": warnings,
                              "state": self.rt.state() if ok else None},
                             200 if ok else 400)
+        elif path == "/api/config/export":
+            # 导出设置：由后端写入「下载」目录并打开所在位置，让用户看得到结果
+            res = self.rt.export_config_to_downloads()
+            self._send_json(res, 200 if res["ok"] else 500)
         elif path == "/api/config/import":
             ok, errors, warnings, applied = self.rt.import_config(payload)
             self._send_json({"ok": ok, "errors": errors, "warnings": warnings,

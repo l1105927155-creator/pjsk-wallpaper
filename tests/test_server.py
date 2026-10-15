@@ -358,6 +358,29 @@ class ServerTest(unittest.TestCase):
         self.assertIn("config", data)
         self.assertNotIn("screen", data["config"])
 
+    def test_config_export_writes_to_downloads_and_reveals(self):
+        """POST 导出：落到「下载」目录并打开所在位置（整合动作为后端完成）。"""
+        with tempfile.TemporaryDirectory() as td:
+            seen = []
+            with mock.patch.object(core, "downloads_dir",
+                                   lambda: Path(td)), \
+                    mock.patch.object(rt, "_reveal_in_explorer",
+                                      lambda p: seen.append(p) or True):
+                status, _ = self.req("POST", "/api/config/export", token=False)
+                self.assertEqual(status, 403)
+                status, body = self.req("POST", "/api/config/export")
+                self.assertEqual(status, 200)
+                data = json.loads(body)
+                self.assertTrue(data["ok"], data)
+                self.assertTrue(data["revealed"], data)
+                self.assertEqual(data["error"], "")
+                path = Path(data["path"])
+                self.assertTrue(path.is_file(), data)
+                self.assertEqual(path.parent, Path(td))
+                self.assertEqual(seen, [path])
+                self.assertEqual(json.loads(path.read_text("utf-8"))["kind"],
+                                 "settings")
+
     def test_config_import_raw_config(self):
         raw = {"desktop": {"enabled": True, "interval": 9},
                "lock": {"enabled": True, "interval": 45},

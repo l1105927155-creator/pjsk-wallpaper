@@ -472,6 +472,55 @@ class UpdateProgressTest(RuntimeBase):
         self.assertIn("超时", st["message"])
 
 
+class ConfigExportToDownloadsTest(RuntimeBase):
+    """导出设置：写到「下载」目录并在资源管理器中选中（不能只有提示没有结果）。"""
+
+    def test_writes_file_and_reveals_it(self):
+        r = rt.Runtime(tick_seconds=9999)
+        seen = []
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(core, "downloads_dir", lambda: Path(td)), \
+                mock.patch.object(rt, "_reveal_in_explorer",
+                                  lambda p: seen.append(p) or True):
+            res = r.export_config_to_downloads()
+            path = Path(res["path"])
+            self.assertTrue(path.is_file(), res)
+            self.assertEqual(path.parent, Path(td))
+            self.assertEqual(seen, [path])
+            data = json.loads(path.read_text("utf-8"))
+        self.assertEqual(res, {"ok": True, "path": str(path), "revealed": True,
+                               "error": ""})
+        self.assertEqual(data["app"], core.APP_NAME)
+        self.assertEqual(data["config"], r.export_config()["config"])
+        # 导出的仍是可迁移信封：本机项不得混进 config
+        self.assertNotIn("close_action", data["config"])
+        self.assertNotIn("autostart", data["config"])
+        self.assertTrue(path.name.startswith("pjsk-wallpaper-settings-"), path.name)
+        self.assertTrue(path.name.endswith(".json"), path.name)
+
+    def test_reveal_failure_still_reports_exported_path(self):
+        """打开文件夹失败不影响导出，但要如实说明并给出路径。"""
+        r = rt.Runtime(tick_seconds=9999)
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(core, "downloads_dir", lambda: Path(td)), \
+                mock.patch.object(rt, "_reveal_in_explorer", lambda p: False):
+            res = r.export_config_to_downloads()
+            self.assertTrue(Path(res["path"]).is_file())   # 临时目录还在
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["revealed"])
+        self.assertIn("未能打开", res["error"])
+
+    def test_write_failure_reports_error(self):
+        r = rt.Runtime(tick_seconds=9999)
+        with tempfile.TemporaryDirectory() as td:
+            blocker = Path(td) / "not-a-dir"
+            blocker.write_text("x", "utf-8")      # 目标位置被文件占住
+            with mock.patch.object(core, "downloads_dir", lambda: blocker):
+                res = r.export_config_to_downloads()
+        self.assertFalse(res["ok"])
+        self.assertIn("导出失败", res["error"])
+
+
 class ConfigImportExportTest(RuntimeBase):
     def _r(self):
         r = rt.Runtime(tick_seconds=9999)

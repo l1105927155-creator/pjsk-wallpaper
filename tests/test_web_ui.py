@@ -134,6 +134,22 @@ class WebUiTest(unittest.TestCase):
         self.assertIn("exportConfig", self.js)
         self.assertIn("FileReader", self.js)
 
+    def test_export_hands_file_to_backend(self):
+        """导出必须由后端落盘并打开所在位置。
+
+        曾经是前端造 Blob 触发浏览器下载：不仅落到哪里用户看不到，WebView 里
+        还可能什么都不发生，只有一句「设置已导出」的提示。
+        """
+        self.assertIn('api("/api/config/export", { method: "POST", body: {} })',
+                      self.js)
+        self.assertNotIn("createObjectURL", self.js)
+        server_src = (ROOT / "server.py").read_text("utf-8")
+        runtime_src = (ROOT / "runtime.py").read_text("utf-8")
+        self.assertIn("def export_config_to_downloads(self)", runtime_src)
+        self.assertIn("core.downloads_dir()", runtime_src)
+        self.assertIn('"/select,', runtime_src)          # 在资源管理器中选中该文件
+        self.assertIn('"/api/config/export"', server_src)
+
     def test_all_new_endpoints_used(self):
         for ep in ("/api/state", "/api/config", "/api/wallpaper/desktop/next",
                    "/api/wallpaper/lock/next", "/api/gallery", "/api/images/",

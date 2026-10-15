@@ -791,21 +791,13 @@
 
   function exportConfig(btn) {
     busy(btn, true);
-    api("/api/config/export").then(function (r) {
-      if (r.status !== 200 || !r.body || !r.body.config) {
-        toast("导出失败", "err");
-        return;
-      }
-      var text = JSON.stringify(r.body, null, 2);
-      var blob = new Blob([text], { type: "application/json" });
-      var a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "pjsk-wallpaper-settings.json";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
-      toast("设置已导出", "ok");
+    // 由后端写入「下载」目录并打开所在位置：浏览器触发的下载落到哪里、
+    // 有没有真的落盘，用户都看不到，只有提示没有结果。
+    api("/api/config/export", { method: "POST", body: {} }).then(function (r) {
+      var b = r.body || {};
+      if (!b.ok) { toast(b.error || "导出失败", "err"); return; }
+      toast(b.revealed ? "已导出到下载目录，并已在资源管理器中选中该文件"
+                       : "已导出到 " + b.path, "ok");
     }).catch(function () {
       toast("导出失败：连接中断", "err");
     }).then(function () { busy(btn, false); });

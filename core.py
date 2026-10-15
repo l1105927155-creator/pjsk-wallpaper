@@ -19,6 +19,9 @@ from PIL import Image
 
 import win_startup
 
+# 「下载」目录的已知文件夹 GUID（Explorer\Shell Folders 下的值名）
+_DOWNLOADS_GUID = "{374DE290-123F-4565-9164-39C4925E467B}"
+
 APP_DIR = Path(__file__).resolve().parent
 APP_NAME = "pjsk-wallpaper"
 CONFIG_PATH = APP_DIR / "config.json"
@@ -422,6 +425,25 @@ def set_autostart(on: bool):
 
 def autostart_on() -> bool:
     return win_startup.is_on()
+
+
+def downloads_dir() -> Path:
+    """当前用户的「下载」目录。
+
+    位置可以由用户改过，所以读注册表里的已知文件夹项，而不是写死 ~/Downloads；
+    读不到时退回 ~/Downloads。
+    """
+    try:
+        with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, _DOWNLOADS_GUID)
+        if value:
+            return Path(value)
+    except OSError:
+        pass
+    return Path.home() / "Downloads"
 
 
 # ---------- 托盘图标资源 ----------

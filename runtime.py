@@ -64,6 +64,19 @@ def _no_window() -> int:
     return 0x08000000 if sys.platform == "win32" else 0
 
 
+def _reveal_in_explorer(path: Path) -> bool:
+    """在资源管理器中打开所在目录并选中该文件；失败返回 False。
+
+    `/select,<路径>` 要作为一个参数传（路径带空格时由 Python 加引号），
+    这是 Explorer 认识的形式。
+    """
+    try:
+        subprocess.Popen(["explorer", f"/select,{path}"])
+        return True
+    except OSError:
+        return False
+
+
 class Runtime:
     """常驻运行时。线程安全：公有方法均可从 HTTP 线程或调度线程调用。"""
 
@@ -506,6 +519,29 @@ class Runtime:
             "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "machine": {"screen": screen},
             "config": cfg,
+        }
+
+    def export_config_to_downloads(self) -> dict:
+        """把设置快照写到用户「下载」目录，并在资源管理器中选中它。
+
+        浏览器里触发的下载落到哪里、有没有真的落盘，用户都看不到；所以导出改由
+        后端落盘并打开所在位置，「导出成功」才有可见结果（文件名带时间戳，
+        不覆盖上一次的导出）。打开文件夹失败不影响导出结果，只是附上说明。
+        """
+        try:
+            data = self.export_config()
+            d = core.downloads_dir()
+            d.mkdir(parents=True, exist_ok=True)
+            path = d / time.strftime("pjsk-wallpaper-settings-%Y%m%d-%H%M%S.json")
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+        except OSError as e:
+            return {"ok": False, "error": f"导出失败：{e}"}
+        revealed = _reveal_in_explorer(path)
+        return {
+            "ok": True,
+            "path": str(path),
+            "revealed": revealed,
+            "error": "" if revealed else "已导出，但未能打开所在文件夹",
         }
 
     def import_config(self, payload):

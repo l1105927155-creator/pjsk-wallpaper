@@ -381,5 +381,30 @@ class UpdateLogTest(unittest.TestCase):
                 self.assertEqual(core.read_update_log(), [])
 
 
+class DownloadsDirTest(unittest.TestCase):
+    """「下载」目录取自注册表的已知文件夹项（位置可能被用户改过）。"""
+
+    def test_reads_shell_folder_value(self):
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(core.winreg, "QueryValueEx",
+                                  lambda key, name: (td, 1)):
+            self.assertEqual(core.downloads_dir(), Path(td))
+
+    def test_falls_back_to_home_downloads(self):
+        with mock.patch.object(core.winreg, "OpenKey",
+                               side_effect=OSError("no key")):
+            self.assertEqual(core.downloads_dir(), Path.home() / "Downloads")
+
+    def test_falls_back_when_value_empty(self):
+        with mock.patch.object(core.winreg, "QueryValueEx",
+                               lambda key, name: ("", 1)):
+            self.assertEqual(core.downloads_dir(), Path.home() / "Downloads")
+
+    def test_real_machine_returns_absolute_path(self):
+        # 本机真实取值：应当是绝对路径，且不要再退回兜底（Windows 一定有该项）
+        p = core.downloads_dir()
+        self.assertTrue(p.is_absolute(), p)
+
+
 if __name__ == "__main__":
     unittest.main()
