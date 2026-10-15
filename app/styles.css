@@ -1,28 +1,29 @@
 /* pjsk 壁纸 · 控制台样式
-   深色卡面主题，配色基调为青葱色（Miku #39c5bb）+ 渐变；原生 CSS
+   亮色主题，配色基调为青葱色（Miku #9ef2e5）+ 渐变；原生 CSS
    （Grid/Flex + media queries），无外部 CDN、无第三方字体。 */
 
 :root {
-  --miku: #39c5bb;
-  --bg: #08191c;
-  --bg-rgb: 8, 25, 28;
-  --bg-soft: #0e2327;
-  --panel: #102a2e;
-  --panel-2: #153238;
-  --border: #1e464b;
-  --border-soft: #173a3f;
-  --text: #e4f1f0;
-  --muted: #8daeae;
-  --muted-2: #6a8a8c;
+  --miku: #9ef2e5;                 /* 主基调：亮青（青葱色） */
+  --miku-deep: #0d837b;            /* 同色系加深，用于描边与链接文字 */
+  --bg: #9ef2e5;
+  --bg-rgb: 158, 242, 229;
+  --bg-soft: rgba(255, 255, 255, .62);
+  --panel: rgba(255, 255, 255, .78);
+  --panel-2: rgba(255, 255, 255, .92);
+  --border: rgba(9, 74, 72, .18);
+  --border-soft: rgba(9, 74, 72, .12);
+  --text: #0b2b2a;
+  --muted: #37605e;
+  --muted-2: #58807e;
   --accent: #4c6fff;
-  --accent-soft: rgba(76, 111, 255, .14);
-  --accent-line: rgba(76, 111, 255, .45);
-  --ok: #45d483;
-  --warn: #f5b544;
-  --danger: #f2686c;
+  --accent-soft: rgba(76, 111, 255, .10);
+  --accent-line: rgba(76, 111, 255, .55);
+  --ok: #1f8f5a;
+  --warn: #b3760b;
+  --danger: #c3423f;
   --radius: 12px;
   --radius-sm: 8px;
-  --shadow: 0 8px 24px rgba(2, 16, 18, .42);
+  --shadow: 0 10px 26px rgba(9, 60, 58, .16);
   --gap: 16px;
   --font: "Microsoft YaHei UI", "Segoe UI", system-ui, -apple-system, sans-serif;
   /* 壁纸切换过渡时长：与 app.js 的 WALL_FADE_MS 必须一致。
@@ -40,9 +41,9 @@ html, body { height: 100%; }
 body {
   margin: 0;
   background:
-    radial-gradient(1200px 620px at 10% -12%, rgba(57, 197, 187, .26), transparent 62%),
-    radial-gradient(900px 520px at 100% 4%, rgba(57, 197, 187, .13), transparent 58%),
-    linear-gradient(168deg, #0b2a2c 0%, #08191c 46%, #061114 100%);
+    radial-gradient(1200px 640px at 8% -12%, #e9fffb 0%, rgba(233, 255, 251, 0) 62%),
+    radial-gradient(920px 540px at 100% 2%, rgba(13, 131, 123, .30), transparent 58%),
+    linear-gradient(165deg, #c9faf1 0%, #9ef2e5 48%, #74e0d2 100%);
   background-attachment: fixed;
   color: var(--text);
   font-family: var(--font);
@@ -68,7 +69,7 @@ button, input, select { font-family: inherit; font-size: inherit; color: inherit
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: 16px;
   padding: 14px 0 12px;
-  background: linear-gradient(180deg, var(--bg) 70%, rgba(var(--bg-rgb), .86));
+  background: linear-gradient(180deg, rgba(233, 255, 251, .94) 62%, rgba(233, 255, 251, 0));
   border-bottom: 1px solid var(--border-soft);
   flex-wrap: wrap;
 }
@@ -151,8 +152,8 @@ main { padding-top: 18px; }
                         padding: 8px; }
 .preview .badge {
   position: absolute; left: 8px; bottom: 8px; z-index: 2;
-  background: rgba(10, 13, 20, .72); border: 1px solid var(--border);
-  padding: 2px 8px; border-radius: 999px; font-size: 11px; color: var(--muted);
+  background: rgba(6, 32, 31, .74); border: 1px solid rgba(255, 255, 255, .22);
+  padding: 2px 8px; border-radius: 999px; font-size: 11px; color: #dcf5f1;
   max-width: calc(100% - 16px); overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -173,7 +174,7 @@ main { padding-top: 18px; }
   transition: background .15s, border-color .15s, transform .05s;
   white-space: nowrap;
 }
-.btn:hover:not(:disabled) { background: #17393e; border-color: #2a5c62; }
+.btn:hover:not(:disabled) { background: #fff; border-color: rgba(13, 131, 123, .55); }
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
@@ -186,8 +187,11 @@ main { padding-top: 18px; }
 .btn.busy::after {
   content: ""; position: absolute; inset: 0; margin: auto;
   width: 15px; height: 15px; border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff;
+  border: 2px solid rgba(11, 43, 42, .28); border-top-color: #0b2b2a;
   animation: spin .7s linear infinite;
+}
+/* 主按钮是蓝底，转圈保持白色 */
+.btn.primary.busy::after { border-color: rgba(255, 255, 255, .4); border-top-color: #fff;
 }
 @keyframes spin { to { transform: rotate(360deg) } }
 
@@ -195,11 +199,11 @@ main { padding-top: 18px; }
 .repo-url {
   display: block; width: 100%; text-align: left; cursor: pointer;
   background: var(--bg-soft); border: 1px solid var(--border);
-  color: var(--accent-line); border-radius: var(--radius-sm);
+  color: var(--miku-deep); border-radius: var(--radius-sm);
   padding: 9px 11px; font-size: 12.5px; word-break: break-all;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-.repo-url:hover { border-color: var(--accent-line); }
+.repo-url:hover { border-color: var(--miku-deep); }
 
 input[type="text"], input[type="number"], select {
   background: var(--bg-soft); border: 1px solid var(--border);
@@ -218,13 +222,13 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px;
           user-select: none; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
 .switch .track {
-  width: 40px; height: 22px; border-radius: 999px; background: #1f4b50;
+  width: 40px; height: 22px; border-radius: 999px; background: rgba(11, 43, 42, .22);
   border: 1px solid var(--border); position: relative; transition: background .18s;
   flex: none;
 }
 .switch .track::after {
   content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
-  border-radius: 50%; background: #d6eceb; transition: transform .18s, background .18s;
+  border-radius: 50%; background: #fff; transition: transform .18s, background .18s;
 }
 .switch input:checked + .track { background: var(--accent); border-color: var(--accent); }
 .switch input:checked + .track::after { transform: translateX(18px); background: #fff; }
@@ -255,11 +259,11 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px;
 .thumb:hover img { transform: scale(1.04); }
 .thumb .tag {
   position: absolute; top: 6px; left: 6px; font-size: 11px; padding: 1px 7px;
-  border-radius: 999px; background: rgba(10, 13, 20, .75);
-  border: 1px solid var(--border); color: var(--muted);
+  border-radius: 999px; background: rgba(6, 32, 31, .76);
+  border: 1px solid rgba(255, 255, 255, .22); color: #dcf5f1;
 }
 .thumb .nm { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 8px;
-             font-size: 11px; color: #e4f1f0; background: linear-gradient(transparent, rgba(2, 16, 18, .88));
+             font-size: 11px; color: #eafbf8; background: linear-gradient(transparent, rgba(6, 32, 31, .9));
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .pager { display: flex; align-items: center; justify-content: center; gap: 12px;
@@ -279,10 +283,10 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px;
 .kv dd { margin: 0; }
 
 .log {
-  background: #081719; border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, .72); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
   padding: 10px 12px; max-height: 240px; overflow: auto;
   font-family: Consolas, "Cascadia Mono", ui-monospace, monospace; font-size: 12px;
-  color: #c2dedd; white-space: pre-wrap; word-break: break-all;
+  color: #12403d; white-space: pre-wrap; word-break: break-all;
 }
 
 .stat { display: flex; align-items: baseline; gap: 8px; }
@@ -294,14 +298,14 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px;
   border: 1px solid var(--border); background: var(--bg-soft); color: var(--muted);
   margin-top: 10px;
 }
-.banner.warn { border-color: rgba(245, 181, 68, .4); color: #f3cf8a; background: rgba(245,181,68,.08); }
-.banner.err { border-color: rgba(242, 104, 108, .4); color: #f3a7a9; background: rgba(242,104,108,.08); }
-.banner.ok { border-color: rgba(69, 212, 131, .38); color: #9fe6bb; background: rgba(69,212,131,.08); }
+.banner.warn { border-color: rgba(179, 118, 11, .38); color: #7d5205; background: rgba(245, 181, 68, .22); }
+.banner.err { border-color: rgba(195, 66, 63, .38); color: #8f2a28; background: rgba(242, 104, 108, .18); }
+.banner.ok { border-color: rgba(31, 143, 90, .38); color: #146245; background: rgba(69, 212, 131, .22); }
 
 /* ---------------- 灯箱 / 弹层 ---------------- */
 
 .modal {
-  position: fixed; inset: 0; z-index: 60; background: rgba(6, 8, 13, .82);
+  position: fixed; inset: 0; z-index: 60; background: rgba(6, 40, 38, .52);
   display: flex; align-items: center; justify-content: center; padding: 24px;
   backdrop-filter: blur(2px);
 }
