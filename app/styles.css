@@ -15,9 +15,9 @@
   --text: #0b2b2a;
   --muted: #37605e;
   --muted-2: #58807e;
-  --accent: #4c6fff;
-  --accent-soft: rgba(76, 111, 255, .10);
-  --accent-line: rgba(76, 111, 255, .55);
+  --accent: #c2ddf5;               /* 按钮 / 开关等组件的填充色 */
+  --accent-soft: rgba(194, 221, 245, .5);
+  --accent-line: #276389;          /* 组件边框色，同时用作焦点轮廓 */
   --ok: #1f8f5a;
   --warn: #b3760b;
   --danger: #c3423f;
@@ -83,11 +83,13 @@ button, input, select { font-family: inherit; font-size: inherit; color: inherit
 .tabs { display: flex; gap: 4px; background: var(--panel); padding: 4px;
         border: 1px solid var(--border); border-radius: 999px; }
 .tabs button {
-  border: 0; background: transparent; color: var(--muted);
+  border: 1px solid transparent; background: transparent; color: var(--muted);
   padding: 6px 16px; border-radius: 999px; cursor: pointer; white-space: nowrap;
 }
 .tabs button:hover { color: var(--text); background: var(--panel-2); }
-.tabs button.active { background: var(--accent); color: #fff; }
+.tabs button.active {
+  background: var(--accent); border-color: var(--accent-line); color: var(--accent-line);
+}
 
 .top-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
@@ -180,8 +182,8 @@ main { padding-top: 18px; }
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: #3f61ea; border-color: #3f61ea; }
+.btn.primary { background: var(--accent); border-color: var(--accent-line); color: var(--accent-line); }
+.btn.primary:hover:not(:disabled) { background: #a9ceef; border-color: var(--accent-line); }
 .btn.ghost { background: transparent; }
 .btn.danger { color: var(--danger); border-color: rgba(242, 104, 108, .35); }
 .btn.lg { padding: 10px 18px; font-size: 15px; }
@@ -191,9 +193,6 @@ main { padding-top: 18px; }
   width: 15px; height: 15px; border-radius: 50%;
   border: 2px solid rgba(11, 43, 42, .28); border-top-color: #0b2b2a;
   animation: spin .7s linear infinite;
-}
-/* 主按钮是蓝底，转圈保持白色 */
-.btn.primary.busy::after { border-color: rgba(255, 255, 255, .4); border-top-color: #fff;
 }
 @keyframes spin { to { transform: rotate(360deg) } }
 
@@ -230,9 +229,10 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px;
 }
 .switch .track::after {
   content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
-  border-radius: 50%; background: #fff; transition: transform .18s, background .18s;
+  border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px rgba(11, 43, 42, .18);
+  transition: transform .18s, background .18s;
 }
-.switch input:checked + .track { background: var(--accent); border-color: var(--accent); }
+.switch input:checked + .track { background: var(--accent); border-color: var(--accent-line); }
 .switch input:checked + .track::after { transform: translateX(18px); background: #fff; }
 .switch input:focus-visible + .track { outline: 2px solid var(--accent-line); outline-offset: 2px; }
 .switch .label { font-size: 13px; color: var(--text); }
@@ -243,9 +243,12 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px;
                    margin-bottom: 14px; }
 .seg { display: inline-flex; background: var(--panel); border: 1px solid var(--border);
        border-radius: 999px; padding: 3px; }
-.seg button { border: 0; background: transparent; color: var(--muted); padding: 6px 14px;
-              border-radius: 999px; cursor: pointer; }
-.seg button.active { background: var(--panel-2); color: var(--text); }
+.seg button { border: 1px solid transparent; background: transparent; color: var(--muted);
+              padding: 6px 14px; border-radius: 999px; cursor: pointer; }
+.seg button:hover { color: var(--text); }
+.seg button.active {
+  background: var(--accent); border-color: var(--accent-line); color: var(--accent-line);
+}
 
 .grid {
   display: grid; gap: 12px;
@@ -276,7 +279,7 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px;
   text-align: center; color: var(--muted); background: var(--bg-soft);
   transition: border-color .15s, background .15s;
 }
-.dropzone.over { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.dropzone.over { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); }
 
 /* ---------------- 状态/日志 ---------------- */
 
@@ -331,7 +334,7 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px;
   cursor: pointer; transition: border-color .15s, background .15s;
 }
 .opt:hover { border-color: var(--accent-line); background: var(--accent-soft); }
-.opt input[type="radio"] { margin: 3px 0 0; accent-color: var(--accent); flex: none; }
+.opt input[type="radio"] { margin: 3px 0 0; accent-color: var(--accent-line); flex: none; }
 .opt input[type="radio"]:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
 .opt > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .box-foot {
