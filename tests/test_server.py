@@ -271,16 +271,21 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(status, 501)
             self.assertFalse(json.loads(body)["ok"])
 
-    def test_window_close_ack_clears_pending_prompt(self):
-        """确认清除：关闭确认是粘性待办，由前端确认后清除（整改 P1）。"""
-        self.rt.request_close_prompt()
-        self.assertTrue(self.rt.state()["close_prompt"])
-        status, _ = self.req("POST", "/api/window/close/ack", token=False)
+    def test_window_close_ack_needs_matching_prompt_id(self):
+        """关闭确认是粘性待办 + 带身份确认：错误/过期身份不得误清除。"""
+        pid = self.rt.request_close_prompt()
+        status, _ = self.req("POST", "/api/window/close/ack", token=False,
+                             body={"prompt": pid})
         self.assertEqual(status, 403)
-        status, body = self.req("POST", "/api/window/close/ack")
+        status, body = self.req("POST", "/api/window/close/ack",
+                                body={"prompt": pid + 99})
         self.assertEqual(status, 200)
-        self.assertTrue(json.loads(body)["ok"])
-        self.assertFalse(self.rt.state()["close_prompt"])
+        self.assertFalse(json.loads(body)["acknowledged"])
+        self.assertEqual(self.rt.state()["close_prompt"], pid)   # 仍在等待
+        status, body = self.req("POST", "/api/window/close/ack", body={"prompt": pid})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["acknowledged"])
+        self.assertEqual(self.rt.state()["close_prompt"], 0)
 
     def test_window_show_calls_launcher_hook(self):
         class FakeUi:

@@ -319,10 +319,10 @@ class _Handler(BaseHTTPRequestHandler):
                                   bool(payload.get("remember")))
             self._send_json(res, 200 if res.get("ok") else 400)
         elif path == "/api/window/close/ack":
-            # 前端确认已弹出关闭确认框：事件按「确认后清除」处理，
-            # 不依赖状态读取顺序，避免被无关读取者抢先消费。
-            self.rt.acknowledge_close_prompt()
-            self._send_json({"ok": True})
+            # 前端确认已弹出关闭确认框：只认与当前待处理请求身份一致的确认，
+            # 迟到的旧确认（用户取消后再次点关闭的那一轮）不会误清新请求。
+            acked = self.rt.acknowledge_close_prompt(payload.get("prompt"))
+            self._send_json({"ok": True, "acknowledged": bool(acked)})
         else:
             self._error(404, "not found")
 

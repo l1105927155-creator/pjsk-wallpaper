@@ -93,7 +93,8 @@ class Runtime:
         self._desk_busy = False
         self._lock_busy = False
         self._proc = None
-        self._close_prompt = False      # 前端关闭确认框的待投递请求
+        self._close_prompt = 0          # 待处理的关闭确认请求身份（0 = 无）
+        self._close_prompt_seq = 0      # 关闭请求身份号的发号器
         self._stop = threading.Event()
         self._thread = None
         self._tick = max(1, int(tick_seconds))
@@ -226,7 +227,7 @@ class Runtime:
                        if up.get("interval_enabled") else None)
             rev = self._rev
             pend = dict(self._pending)
-            # 关闭确认是粘性待办：读取（无论来自谁）不清除，由前端确认后清除。
+            # 关闭确认是粘性待办：读取（无论来自谁）不清除，由前端带身份号确认后清除。
             # /api/state 的读取者不止内嵌页面一个，若读到就清零，无关请求或
             # 并发竞态会抢先消费掉，真正要弹框的页面就收不到。
             close_prompt = self._close_prompt
@@ -275,22 +276,37 @@ class Runtime:
             self._status = msg
             self._bump()
 
-    def request_close_prompt(self):
-        """请前端弹出「关闭窗口」确认框。
+    def request_close_prompt(self) -> int:
+        """请前端弹出「关闭窗口」确认框，返回本次请求的身份号。
 
-        走既有的状态推送通道：置标志并 +1 修订号，挂起中的长轮询立刻返回，
-        前端在收到状态时弹框。标志保持待处理直到前端确认
-        （acknowledge_close_prompt），这样页面刷新、长轮询重连或并发状态请求
-        都不会让它无提示丢失；前端弹框是幂等的，重复收到只会聚焦已有弹框。
+        走既有的状态推送通道：置身份号并 +1 修订号，挂起中的长轮询立刻返回，
+        前端在收到状态时弹框。身份号保持待处理直到前端带着**同一个号**确认
+        （acknowledge_close_prompt），因此：
+        - 页面刷新、长轮询重连或并发状态请求都不会让它无提示丢失；
+        - 迟到的旧确认（用户取消后再点关闭产生的上一轮请求）不会误清掉新一轮。
+        前端弹框是幂等的，重复收到只会聚焦已有弹框。
         """
         with self._lock:
-            self._close_prompt = True
+            self._close_prompt_seq += 1
+            self._close_prompt = self._close_prompt_seq
             self._bump()
+            return self._close_prompt
 
-    def acknowledge_close_prompt(self):
-        """前端确认已弹出关闭确认框，清除待处理标志。"""
+    def acknowledge_close_prompt(self, prompt_id) -> bool:
+        """前端确认已弹出指定身份的关闭确认框。
+
+        只清除与当前待处理请求身份一致的确认；重复、过期或身份错误的确认
+        一律无害忽略（返回 False），不会误清掉后来的新请求。
+        """
+        try:
+            pid = int(prompt_id)
+        except (TypeError, ValueError):
+            return False
         with self._lock:
-            self._close_prompt = False
+            if self._close_prompt == 0 or pid != self._close_prompt:
+                return False
+            self._close_prompt = 0
+            return True
 
     @staticmethod
     def _public_current(image_id):

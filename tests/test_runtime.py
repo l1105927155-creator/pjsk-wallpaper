@@ -673,28 +673,47 @@ class ClosePromptTest(RuntimeBase):
     """关闭确认请求经状态推送投递：宿主不需要向页面注入脚本。"""
 
     def test_prompt_is_sticky_until_acknowledged(self):
-        """整改：状态读取者不止内嵌页面一个，事件不能读一次就清零。
+        """状态读取者不止内嵌页面一个，事件不能读一次就清零。"""
+        r = rt.Runtime(tick_seconds=9999)
+        self.assertEqual(r.state()["close_prompt"], 0)      # 默认无请求
+        pid = r.request_close_prompt()
+        self.assertGreater(pid, 0)
+        self.assertEqual(r.state()["close_prompt"], pid)    # 第一个读者
+        self.assertEqual(r.state()["close_prompt"], pid)    # 第二个读者仍能看到
+        self.assertEqual(r.wait_state(0, 0)["close_prompt"], pid)  # 长轮询同样带身份
+        self.assertTrue(r.acknowledge_close_prompt(pid))
+        self.assertEqual(r.state()["close_prompt"], 0)
 
-        曾是「读到即消费」：并发状态请求（前端保存配置/更新时自己也会再发一次
-        /api/state）会抢先消费掉，真正要弹框的页面收不到。
+    def test_late_ack_of_previous_request_does_not_clear_new_one(self):
+        """第三轮整改：迟到的旧确认不得清除新一轮请求。
+
+        用户取消弹框后再次点关闭会产生新请求；上一轮那次确认若迟到，
+        不能把新请求一并清掉（否则再点关闭就没有任何反应）。
         """
         r = rt.Runtime(tick_seconds=9999)
-        self.assertFalse(r.state()["close_prompt"])     # 默认无请求
-        r.request_close_prompt()
-        self.assertTrue(r.state()["close_prompt"])      # 第一个读者
-        self.assertTrue(r.state()["close_prompt"])      # 第二个读者仍能看到
-        self.assertTrue(r.wait_state(0, 0)["close_prompt"])  # 长轮询响应同样带标志
-        r.acknowledge_close_prompt()                    # 前端确认已弹框
-        self.assertFalse(r.state()["close_prompt"])
+        a = r.request_close_prompt()
+        b = r.request_close_prompt()
+        self.assertNotEqual(a, b)
+        self.assertFalse(r.acknowledge_close_prompt(a))         # A 的确认迟到
+        self.assertEqual(r.state()["close_prompt"], b, "B 必须仍在等待确认")
+        self.assertTrue(r.acknowledge_close_prompt(b))
+        self.assertEqual(r.state()["close_prompt"], 0)
 
-    def test_prompt_can_be_requested_again_after_ack(self):
+    def test_duplicate_wrong_and_missing_ack_are_harmless(self):
         r = rt.Runtime(tick_seconds=9999)
-        r.request_close_prompt()
-        r.acknowledge_close_prompt()
-        r.request_close_prompt()                        # 用户再次点关闭
-        self.assertTrue(r.state()["close_prompt"])
-        r.acknowledge_close_prompt()
-        self.assertFalse(r.state()["close_prompt"])
+        pid = r.request_close_prompt()
+        self.assertTrue(r.acknowledge_close_prompt(pid))
+        self.assertFalse(r.acknowledge_close_prompt(pid), "重复确认应无害")
+        pid2 = r.request_close_prompt()
+        for bad in (pid, pid2 + 99, 0, -1, None, "", "abc", []):
+            self.assertFalse(r.acknowledge_close_prompt(bad), repr(bad))
+        self.assertEqual(r.state()["close_prompt"], pid2)
+
+    def test_each_close_request_gets_a_new_identity(self):
+        r = rt.Runtime(tick_seconds=9999)
+        ids = [r.request_close_prompt() for _ in range(3)]
+        self.assertEqual(len(set(ids)), 3, "连续关闭应产生不同身份号")
+        self.assertEqual(r.state()["close_prompt"], ids[-1])
 
     def test_prompt_wakes_pending_long_poll(self):
         """请求弹框要让挂起中的长轮询立刻返回，否则窗口关闭后会等满超时。"""

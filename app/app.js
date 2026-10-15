@@ -143,11 +143,12 @@
       offset = (S.server_time || Date.now() / 1000) - Date.now() / 1000;
       render(S);
       // 宿主在「用户点了关闭且未保存过选择」时经状态推送请求弹确认框。
-      // 该标志是粘性待办（状态读取者不止本页一个，读到不清零）：
-      // 弹框后立即确认清除；弹框本身幂等，重复收到只会聚焦已有弹框。
+      // 该标志是粘性待办（状态读取者不止本页一个，读到不清零）：弹框后带
+      // 当次请求身份号确认，只有匹配的确认才清除，迟到的旧确认不会误清新请求。
       if (S.close_prompt) {
         promptClose();
-        api("/api/window/close/ack", { method: "POST", body: {} })
+        api("/api/window/close/ack",
+            { method: "POST", body: { prompt: S.close_prompt } })
           .catch(function () { /* 确认失败也没关系，下次状态仍会重提 */ });
       }
       schedulePoll();

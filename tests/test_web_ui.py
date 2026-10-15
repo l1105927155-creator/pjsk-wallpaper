@@ -197,13 +197,14 @@ class WebUiTest(unittest.TestCase):
         launcher = (ROOT / "launcher.pyw").read_text("utf-8")
         server_src = (ROOT / "server.py").read_text("utf-8")
         runtime_src = (ROOT / "runtime.py").read_text("utf-8")
-        # 宿主 → 页面：走状态推送，不注入脚本；事件粘性待办、由前端确认清除
+        # 宿主 → 页面：走状态推送，不注入脚本；事件粘性待办、带身份确认后清除
         self.assertIn("self._rt.request_close_prompt()", launcher)
-        self.assertIn("def request_close_prompt(", runtime_src)
-        self.assertIn("def acknowledge_close_prompt(", runtime_src)
+        self.assertIn("def request_close_prompt(self) -> int", runtime_src)
+        self.assertIn("def acknowledge_close_prompt(self, prompt_id)", runtime_src)
         self.assertIn("if (S.close_prompt) {", self.js)
         self.assertIn("promptClose();", self.js)
         self.assertIn('api("/api/window/close/ack"', self.js)
+        self.assertIn("body: { prompt: S.close_prompt }", self.js)
         self.assertNotIn(".evaluate_js(", launcher)   # 不向页面注入脚本求值
         # 页面 → 宿主：走本机 HTTP
         self.assertIn('api("/api/window/close"', self.js)
